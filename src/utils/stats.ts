@@ -21,7 +21,8 @@ export function aggregateStats(trades: Trade[]): AggregateStats {
   const lossSum = losses.reduce((sum, t) => sum + t.pnl, 0) // negative
   const profitFactor = wins.length && lossSum !== 0 ? winSum / Math.abs(lossSum) : 0
   const averageReturn = totalPnl / trades.length
-  const winRate = (wins.length / trades.length) * 100
+  const countedTrades = wins.length + losses.length
+  const winRate = countedTrades ? (wins.length / countedTrades) * 100 : 0
   return {
     cumulativeReturn: totalPnl,
     profitFactor,
