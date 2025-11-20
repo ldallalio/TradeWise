@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { NavLink, Route, Routes, useNavigate } from 'react-router-dom'
+import { NavLink, Route, Routes, useNavigate, useLocation } from 'react-router-dom'
 import './App.css'
 import { trades } from './data/mockData'
 import { DashboardPage } from './pages/DashboardPage'
@@ -30,6 +30,7 @@ const navItems: NavItem[] = [
 
 export default function App() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [session, setSession] = useState<Session | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
   const [authError, setAuthError] = useState<string | null>(null)
@@ -38,6 +39,7 @@ export default function App() {
   const [accountDropdownOpen, setAccountDropdownOpen] = useState(false)
   const [accountOptions, setAccountOptions] = useState<{ id: string; broker: string }[]>([])
   const [selectedAccounts, setSelectedAccounts] = useState<string[] | null>(null)
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const accountDropdownRef = useRef<HTMLDivElement | null>(null)
 
   const loadAccountOptions = useCallback(
@@ -152,6 +154,16 @@ export default function App() {
     return `${selectedAccounts.length} accounts`
   }, [selectedAccounts, accountIds.length])
 
+  useEffect(() => {
+    if (!mobileSidebarOpen) {
+      setAccountDropdownOpen(false)
+    }
+  }, [mobileSidebarOpen])
+
+  useEffect(() => {
+    setMobileSidebarOpen(false)
+  }, [location.pathname])
+
   if (!session && !authLoading) {
     return (
       <div className="login-screen">
@@ -191,95 +203,121 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <NavLink to="/" className="brand">
-          <div className="brand-icon" />
-          <div className="brand-text">
-            <span>TraderWise</span>
+      <aside className={`sidebar ${mobileSidebarOpen ? 'mobile-open' : ''}`}>
+        <button
+          className="mobile-sidebar-toggle"
+          type="button"
+          onClick={() => setMobileSidebarOpen((open) => !open)}
+        >
+          <div>
+            <span className="mobile-brand">TraderWise</span>
+            <span className="mobile-summary">{accountSummary}</span>
           </div>
-        </NavLink>
+          <span className={`chevron ${mobileSidebarOpen ? 'open' : ''}`}>▾</span>
+        </button>
 
-        <div className="profile">
-          <div className="avatar">L</div>
-          <div className="profile-meta">
-            <div className="name">{session?.user?.email ?? 'Logged in'}</div>
-            <button className="link subtle button-link" type="button" onClick={handleLogout}>
-              Sign out
-            </button>
-          </div>
-        </div>
-
-        <div className="sidebar-card account-filter" ref={accountDropdownRef}>
-          <span className="label">Accounts</span>
-          <button className="selector" type="button" onClick={() => setAccountDropdownOpen((open) => !open)}>
-            <span>{accountSummary}</span>
-            <span className={`chevron ${accountDropdownOpen ? 'open' : ''}`}>▾</span>
-          </button>
-          {accountDropdownOpen && (
-            <div className="account-dropdown">
-              <div className="account-actions">
-                <button className="small-btn" type="button" onClick={selectAllAccounts}>
-                  Select all
-                </button>
-                <button className="small-btn" type="button" onClick={clearAccounts}>
-                  Clear
-                </button>
-              </div>
-              <div className="account-options">
-                {accountOptions.length ? (
-                  accountOptions.map((option) => {
-                    const checked =
-                      selectedAccounts === null || selectedAccounts.includes(option.id) || accountIds.length === 0
-                    return (
-                      <label key={option.id} className="account-option">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => toggleAccountSelection(option.id)}
-                        />
-                        <span>
-                          <strong>{option.id}</strong>
-                          <span className="muted tiny block">{option.broker}</span>
-                        </span>
-                      </label>
-                    )
-                  })
-                ) : (
-                  <div className="muted tiny">No accounts detected yet.</div>
-                )}
-              </div>
+        <div className="sidebar-inner">
+          <NavLink
+            to="/"
+            className="brand"
+            onClick={() => {
+              if (mobileSidebarOpen) setMobileSidebarOpen(false)
+            }}
+          >
+            <div className="brand-icon" />
+            <div className="brand-text">
+              <span>TraderWise</span>
             </div>
-          )}
-        </div>
+          </NavLink>
 
-        <nav className="nav">
-          {navItems.map((item) => (
-            <NavLink
-              key={item.label}
-              to={item.to}
-              className={({ isActive }) =>
-                `nav-item ${isActive ? 'active' : ''} ${item.locked ? 'locked' : ''}`
-              }
-              onClick={(e) => {
-                if (item.locked) {
-                  e.preventDefault()
+          <div className="profile">
+            <div className="avatar">L</div>
+            <div className="profile-meta">
+              <div className="name">{session?.user?.email ?? 'Logged in'}</div>
+              <button className="link subtle button-link" type="button" onClick={handleLogout}>
+                Sign out
+              </button>
+            </div>
+          </div>
+
+          <div className="sidebar-card account-filter" ref={accountDropdownRef}>
+            <span className="label">Accounts</span>
+            <button className="selector" type="button" onClick={() => setAccountDropdownOpen((open) => !open)}>
+              <span>{accountSummary}</span>
+              <span className={`chevron ${accountDropdownOpen ? 'open' : ''}`}>▾</span>
+            </button>
+            {accountDropdownOpen && (
+              <div className="account-dropdown">
+                <div className="account-actions">
+                  <button className="small-btn" type="button" onClick={selectAllAccounts}>
+                    Select all
+                  </button>
+                  <button className="small-btn" type="button" onClick={clearAccounts}>
+                    Clear
+                  </button>
+                </div>
+                <div className="account-options">
+                  {accountOptions.length ? (
+                    accountOptions.map((option) => {
+                      const checked =
+                        selectedAccounts === null || selectedAccounts.includes(option.id) || accountIds.length === 0
+                      return (
+                        <label key={option.id} className="account-option">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleAccountSelection(option.id)}
+                          />
+                          <span>
+                            <strong>{option.id}</strong>
+                            <span className="muted tiny block">{option.broker}</span>
+                          </span>
+                        </label>
+                      )
+                    })
+                  ) : (
+                    <div className="muted tiny">No accounts detected yet.</div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <nav className="nav">
+            {navItems.map((item) => (
+              <NavLink
+                key={item.label}
+                to={item.to}
+                className={({ isActive }) =>
+                  `nav-item ${isActive ? 'active' : ''} ${item.locked ? 'locked' : ''}`
                 }
+                onClick={(e) => {
+                  if (item.locked) {
+                    e.preventDefault()
+                    return
+                  }
+                  if (mobileSidebarOpen) setMobileSidebarOpen(false)
+                }}
+              >
+                <span className={`icon ${item.icon} ${item.locked ? 'muted' : ''}`} />
+                <span className="nav-label">{item.label}</span>
+                {item.locked && <span className="lock">🔒</span>}
+              </NavLink>
+            ))}
+          </nav>
+
+          <div className="sidebar-actions">
+            <button
+              className="pill-button gradient soft"
+              type="button"
+              onClick={() => {
+                navigate('/import')
+                if (mobileSidebarOpen) setMobileSidebarOpen(false)
               }}
             >
-              <span className={`icon ${item.icon} ${item.locked ? 'muted' : ''}`} />
-              <span className="nav-label">{item.label}</span>
-              {item.locked && <span className="lock">🔒</span>}
-            </NavLink>
-          ))}
-        </nav>
-
-        <div className="sidebar-actions">
-          {/* <button className="pill-button gradient" type="button">
-            + Transaction
-          </button> */}
-          <button className="pill-button gradient soft" type="button" onClick={() => navigate('/import')}>
-            ⬇ Import
-          </button>
+              ⬇ Import
+            </button>
+          </div>
         </div>
       </aside>
 
