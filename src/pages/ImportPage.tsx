@@ -129,6 +129,19 @@ const pnlMatchers: ColumnMatcher[] = [
 
 const changeMatchers: ColumnMatcher[] = ['change', 'status', 'result', (key) => key.endsWith('_status')]
 
+const detailFieldCandidates = [
+  'details',
+  'description',
+  'detail',
+  'message',
+  'note',
+  'notes',
+  'comment',
+  'text',
+  'info',
+  'summary'
+]
+
 const normalizeTickerSymbol = (value?: string) => {
   if (!value) return ''
   const trimmed = value.trim()
@@ -162,6 +175,16 @@ const buildTimestamp = (raw?: string, datePart?: string, timePart?: string) => {
   const parsed = new Date(withZone)
   if (Number.isNaN(parsed.getTime())) return null
   return parsed.toISOString()
+}
+
+const inferSideFromDetails = (value?: string) => {
+  if (!value) return null
+  const text = value.toLowerCase()
+  const mentionsShort = /(open|close|enter)\s+short\s+position|\bshort position\b/.test(text)
+  const mentionsLong = /(open|close|enter)\s+long\s+position|\blong position\b/.test(text)
+  if (mentionsShort && !mentionsLong) return 'Short'
+  if (mentionsLong && !mentionsShort) return 'Long'
+  return null
 }
 
 const instructionsByBroker: Record<string, string[]> = {
@@ -508,7 +531,11 @@ const parseCsv = (text: string, broker: string): Partial<Trade>[] => {
         const rawTicker =
           record.ticker || record.symbol || record.instrument || record.product || record.contract || record.product_description || ''
         const ticker = normalizeTickerSymbol(rawTicker)
-        const side = normalizeSide(record.side || record.b_s || record.buy_sell || record.order_action)
+        const detailSource = detailFieldCandidates
+          .map((key) => record[key])
+          .find((value): value is string => Boolean(value && value.trim()))
+        const inferredSide = inferSideFromDetails(detailSource?.trim())
+        const side = inferredSide ?? normalizeSide(record.side || record.b_s || record.buy_sell || record.order_action)
         const fillPrice = parseNumber(
           record.fill_price ||
             record.fillprice ||
