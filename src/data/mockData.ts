@@ -10,6 +10,9 @@ export type Trade = {
   pnl: number
   change: string
   entry_ts?: string | null
+  commission?: number | null
+  fill_price?: number | null
+  raw_payload?: Record<string, unknown> | null
   source_account?: string | null
   source_broker?: string | null
 }

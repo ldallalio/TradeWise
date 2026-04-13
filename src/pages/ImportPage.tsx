@@ -1,17 +1,28 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { PageHeader } from '../components/PageHeader'
 import { supabase } from '../supabaseClient'
 import type { Trade } from '../data/mockData'
 import { brokerSchemas } from '../data/brokerSchemas'
+import { formatLocalDate, formatLocalTime, getTradeDate } from '../utils/trades'
 
 type Props = {
   userId?: string
 }
 
-const brokers = [
-  'Tradovate',
-  'TradingView'
-]
+const brokers = ['Tradovate', 'TradingView', 'Generic CSV Format'] as const
+
+const buildTradovateAuthHelp = (message: string) => {
+  if (!/incorrect username or password/i.test(message)) {
+    return `Tradovate sync failed: ${message}`
+  }
+
+  return [
+    'Tradovate rejected the login.',
+    'Use your Tradovate login username or email, not the trading account name.',
+    'Also verify the environment is correct: Apex/trading accounts are often on Live, not Demo.',
+    'If Tradovate requires API access for your account, you may also need an API secret.'
+  ].join(' ')
+}
 
 type ImportSource = {
   key: string
@@ -20,6 +31,44 @@ type ImportSource = {
   type: string
   details: string
   updated: string
+}
+
+type SourceTradeRow = {
+  source_account: string | null
+  source_broker: string | null
+  entry_ts: string | null
+}
+
+type ExistingTradeRow = {
+  entry_ts: string | null
+  ticker: string | null
+  side: string | null
+  type: string | null
+  qty: number | null
+  pnl: number | null
+  change: string | null
+}
+
+type DeleteTradeRow = {
+  id: string
+}
+
+type InsertTradeRow = {
+  user_id: string
+  entry_ts: string | null
+  side: string | null
+  ticker: string | null
+  type: string | null
+  qty: number | null
+  pnl: number | null
+  change: string | null
+  source_account: string
+  source_broker: string
+  date: string | null
+  time: string | null
+  commission: number | null
+  fill_price: number | null
+  raw_payload: Record<string, unknown> | null
 }
 
 const formatTimestamp = (value?: string | null) => {
@@ -61,6 +110,44 @@ const splitCsvLine = (line: string) => {
   }
   cells.push(current)
   return cells
+}
+
+const parseUsDateTime = (value?: string | null) => {
+  if (!value) return null
+  const trimmed = value.trim()
+  const match = trimmed.match(
+    /^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/
+  )
+  if (!match) return null
+  const [, monthStr, dayStr, yearStr, hourStr, minuteStr, secondStr] = match
+  const month = Number(monthStr)
+  const day = Number(dayStr)
+  const year = Number(yearStr.length === 2 ? `20${yearStr}` : yearStr)
+  const hour = Number(hourStr ?? 0)
+  const minute = Number(minuteStr ?? 0)
+  const second = Number(secondStr ?? 0)
+  const date = new Date(year, month - 1, day, hour, minute, second)
+  if (Number.isNaN(date.getTime())) return null
+  return date
+}
+
+const normalizeDateOnly = (value?: string | null) => {
+  if (!value) return ''
+  const isoMatch = value.trim().match(/^\d{4}-\d{2}-\d{2}$/)
+  if (isoMatch) return value.trim()
+  const parsed = parseUsDateTime(value)
+  if (parsed) return formatLocalDate(parsed)
+  const isoCandidate = new Date(value)
+  if (!Number.isNaN(isoCandidate.getTime())) return formatLocalDate(isoCandidate)
+  return value
+}
+
+const extractTimePart = (value?: string | null) => {
+  if (!value) return ''
+  const match = value.trim().match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/)
+  if (!match) return ''
+  const [, hh, mm] = match
+  return `${hh.padStart(2, '0')}:${mm}`
 }
 
 const parseNumber = (value?: string) => {
@@ -160,19 +247,26 @@ const getPointValue = (ticker?: string) => {
     return 20
   }
   if (normalized.startsWith('MNQ')) {
-    return 1
+    return 2
   }
   return 1
 }
 
 const buildTimestamp = (raw?: string, datePart?: string, timePart?: string) => {
+  const candidates = [
+    raw,
+    datePart && timePart ? `${datePart} ${timePart}` : undefined
+  ].filter(Boolean) as string[]
+  for (const candidate of candidates) {
+    const localParsed = parseUsDateTime(candidate)
+    if (localParsed) return localParsed.toISOString()
+  }
   const source = raw?.trim() || (datePart && timePart ? `${datePart} ${timePart}` : undefined)
   if (!source) return null
   const trimmed = source.trim()
   const hasT = trimmed.includes('T')
   const isoCandidate = hasT ? trimmed : trimmed.replace(' ', 'T')
-  const withZone = /Z$/i.test(isoCandidate) ? isoCandidate : `${isoCandidate}Z`
-  const parsed = new Date(withZone)
+  const parsed = new Date(isoCandidate)
   if (Number.isNaN(parsed.getTime())) return null
   return parsed.toISOString()
 }
@@ -197,6 +291,11 @@ const instructionsByBroker: Record<string, string[]> = {
     'Log into Tradovate.',
     'Navigate to Reports → Account Statements.',
     'Export the statement covering the range you need.'
+  ],
+  'Generic CSV Format': [
+    'Export your broker history as CSV.',
+    'Match the file to the generic schema shown below.',
+    'Upload the CSV to import trades.'
   ],
   Default: [
     'Log into your broker account.',
@@ -230,10 +329,10 @@ const buildTradeKey = (trade: {
 export function ImportPage({ userId }: Props) {
   const [sources, setSources] = useState<ImportSource[]>([])
   const [sourcesLoading, setSourcesLoading] = useState(false)
-  const [selectedBroker, setSelectedBroker] = useState(brokers[0])
+  const [selectedBroker, setSelectedBroker] = useState<string>(brokers[0])
   const [brokerDropdownOpen, setBrokerDropdownOpen] = useState(false)
   const [brokerSearch, setBrokerSearch] = useState('')
-  const [accountName, setAccountName] = useState('')
+  const [accountName, setAccountName] = useState<string>(brokers[0])
   const [method] = useState('Statement')
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [status, setStatus] = useState<string | null>(null)
@@ -242,13 +341,21 @@ export function ImportPage({ userId }: Props) {
   const [extraFees, setExtraFees] = useState('')
   const [importStartDate, setImportStartDate] = useState('')
   const [deletingSource, setDeletingSource] = useState<string | null>(null)
+  const [syncEnvironment, setSyncEnvironment] = useState<'live' | 'demo'>('live')
+  const [tradovateUsername, setTradovateUsername] = useState('')
+  const [tradovatePassword, setTradovatePassword] = useState('')
+  const [tradovateAppId, setTradovateAppId] = useState('TradeWise')
+  const [tradovateAppVersion, setTradovateAppVersion] = useState('1.0')
+  const [tradovateCid, setTradovateCid] = useState('0')
+  const [tradovateSecret, setTradovateSecret] = useState('')
+  const [syncBusy, setSyncBusy] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const dropdownRef = useRef<HTMLDivElement | null>(null)
   const filteredBrokers = brokers.filter((broker) =>
     broker.toLowerCase().includes(brokerSearch.toLowerCase())
   )
 
-  const loadSources = async (uid?: string) => {
+  const loadSources = useCallback(async (uid?: string) => {
     setSourcesLoading(true)
     if (!uid) {
       setSources([])
@@ -265,6 +372,7 @@ export function ImportPage({ userId }: Props) {
       setSourcesLoading(false)
       return
     }
+    const rows = (data ?? []) as SourceTradeRow[]
     const grouped = new Map<
       string,
       {
@@ -273,7 +381,7 @@ export function ImportPage({ userId }: Props) {
         latest?: string | null
       }
     >()
-    data?.forEach((row: any) => {
+    rows.forEach((row) => {
       const accountId = row.source_account
       if (!accountId) return
       const broker = row.source_broker || 'Unknown'
@@ -302,15 +410,16 @@ export function ImportPage({ userId }: Props) {
       }))
     )
     setSourcesLoading(false)
-  }
+  }, [])
 
   useEffect(() => {
-    loadSources(userId)
-  }, [userId])
-
-  useEffect(() => {
-    setAccountName((prev) => prev || selectedBroker)
-  }, [selectedBroker])
+    const frame = window.requestAnimationFrame(() => {
+      void loadSources(userId)
+    })
+    return () => {
+      window.cancelAnimationFrame(frame)
+    }
+  }, [loadSources, userId])
 
   useEffect(() => {
     const handleClick = (event: MouseEvent) => {
@@ -348,51 +457,78 @@ export function ImportPage({ userId }: Props) {
       setStatus('Please sign in to delete sources.')
       return
     }
-    // eslint-disable-next-line no-alert
-    const confirmDelete = window.confirm(`Delete all trades linked to ${source.accountId}?`)
+    const confirmDelete = window.confirm(`Delete all trades linked to ${source.accountId} (${source.broker})?`)
     if (!confirmDelete) return
     const key = `${source.accountId}::${source.broker}`
     setDeletingSource(key)
-    setStatus(`Deleting ${source.accountId}…`)
-    console.log('[Import] delete requested', { userId, source })
-    const { data: rows, error: selectError } = await supabase
-      .from('trades')
-      .select('id')
-      .match({ user_id: userId, source_account: source.accountId })
-    console.log('[Import] delete select response', { rows, selectError })
-    if (selectError) {
-      setStatus(`Unable to load trades for ${source.accountId}: ${selectError.message}`)
-      setDeletingSource(null)
-      return
-    }
-    const ids = rows?.map((row: { id: string }) => row.id) ?? []
-    if (!ids.length) {
-      setStatus(`No trades found for ${source.accountId}.`)
-      setDeletingSource(null)
-      await loadSources(userId)
-      return
-    }
+    setStatus(`Deleting ${source.accountId} (${source.broker})…`)
     const { data: deletedRows, error } = await supabase
       .from('trades')
       .delete()
-      .eq('user_id', userId)
-      .in('id', ids)
+      .match({ user_id: userId, source_account: source.accountId, source_broker: source.broker })
       .select('id')
-    console.log('[Import] delete mutation response', { error, deletedRows })
     if (error) {
       setStatus(`Unable to delete ${source.accountId}: ${error.message}`)
       setDeletingSource(null)
       return
     }
-    if (!deletedRows?.length) {
-      setStatus('No trades were removed. Ensure a delete RLS policy exists (auth.uid() = user_id).')
+    const deleted = (deletedRows ?? []) as DeleteTradeRow[]
+    if (!deleted.length) {
+      setStatus(`No trades found for ${source.accountId} (${source.broker}).`)
       setDeletingSource(null)
+      await loadSources(userId)
       return
     }
-    setStatus(`Deleted ${deletedRows.length} trades for ${source.accountId}.`)
+    setStatus(`Deleted ${deleted.length} trades for ${source.accountId} (${source.broker}).`)
     setSources((prev) => prev.filter((item) => item.key !== key))
     await loadSources(userId)
     setDeletingSource(null)
+  }
+
+  const handleTradovateSync = async () => {
+    if (!userId) {
+      setStatus('Please sign in to sync Tradovate.')
+      return
+    }
+    if (!tradovateUsername.trim() || !tradovatePassword) {
+      setStatus('Tradovate username and password are required to sync.')
+      return
+    }
+
+    setSyncBusy(true)
+    setStatus('Syncing Tradovate fills…')
+
+    const { data, error } = await supabase.functions.invoke<{
+      insertedCount: number
+      skippedCount: number
+      accountSummaries: Array<{ accountName: string; imported: number; skipped: number }>
+    }>('tradovate-sync', {
+      body: {
+        environment: syncEnvironment,
+        name: tradovateUsername.trim(),
+        password: tradovatePassword,
+        appId: tradovateAppId.trim() || 'TradeWise',
+        appVersion: tradovateAppVersion.trim() || '1.0',
+        cid: tradovateCid.trim() || '0',
+        sec: tradovateSecret.trim() || undefined,
+        importStartDate: importStartDate || undefined
+      }
+    })
+
+    if (error) {
+      setStatus(buildTradovateAuthHelp(error.message))
+      setSyncBusy(false)
+      return
+    }
+
+    const summary = data?.accountSummaries.length
+      ? data.accountSummaries.map((item) => `${item.accountName}: ${item.imported} imported`).join(' | ')
+      : 'No account data returned.'
+    setStatus(
+      `Tradovate sync complete. Imported ${data?.insertedCount ?? 0} trades, skipped ${data?.skippedCount ?? 0}. ${summary}`
+    )
+    await loadSources(userId)
+    setSyncBusy(false)
   }
 
 type ParsedCsvRow = {
@@ -404,10 +540,108 @@ type ParsedCsvRow = {
     feePerUnit: number
     totalFee: number
     pointValue: number
+    isTradovateFilled?: boolean
+    closedQty?: number
   }
 }
 
 type Lot = { qty: number; price: number; feePerUnit: number; multiplier: number }
+type OpenLot = { qty: number; price: number; multiplier: number; openedAt: string | null }
+
+const buildTradovateClosedTrades = (rows: ParsedCsvRow[]): Partial<Trade>[] => {
+  const longLots = new Map<string, OpenLot[]>()
+  const shortLots = new Map<string, OpenLot[]>()
+  const ordered = [...rows].sort((a, b) => getTradeTimestamp(a.trade) - getTradeTimestamp(b.trade))
+  const closedTrades: Partial<Trade>[] = []
+
+  for (const row of ordered) {
+    const ticker = row.trade.ticker
+    const side = row.meta.side.toLowerCase()
+    const qty = row.meta.qty
+    const fillPrice = row.meta.fillPrice
+    if (!ticker || !qty || fillPrice === undefined || fillPrice === null) continue
+
+    const multiplier = row.meta.pointValue || 1
+    let remaining = qty
+
+    if (side === 'buy' || side === 'long') {
+      const shortQueue = shortLots.get(ticker) ?? []
+      while (remaining > 0 && shortQueue.length) {
+        const lot = shortQueue[0]
+        const matched = Math.min(remaining, lot.qty)
+        const pnl = (lot.price - fillPrice) * matched * lot.multiplier
+        closedTrades.push({
+          ...row.trade,
+          side: 'Short',
+          qty: matched,
+          pnl,
+          type: 'Future',
+          fill_price: fillPrice,
+          raw_payload: {
+            ...(row.trade.raw_payload ?? {}),
+            _matched_open_ts: lot.openedAt,
+            _matched_open_price: lot.price,
+            _matched_close_price: fillPrice,
+            _matched_qty: matched
+          }
+        })
+        lot.qty -= matched
+        remaining -= matched
+        if (lot.qty <= 1e-8) shortQueue.shift()
+      }
+      if (shortQueue.length) {
+        shortLots.set(ticker, shortQueue.filter((lot) => lot.qty > 0))
+      } else {
+        shortLots.delete(ticker)
+      }
+      if (remaining > 0) {
+        const lots = longLots.get(ticker) ?? []
+        lots.push({ qty: remaining, price: fillPrice, multiplier, openedAt: row.trade.entry_ts ?? null })
+        longLots.set(ticker, lots)
+      }
+      continue
+    }
+
+    if (side === 'sell' || side === 'short') {
+      const longQueue = longLots.get(ticker) ?? []
+      while (remaining > 0 && longQueue.length) {
+        const lot = longQueue[0]
+        const matched = Math.min(remaining, lot.qty)
+        const pnl = (fillPrice - lot.price) * matched * lot.multiplier
+        closedTrades.push({
+          ...row.trade,
+          side: 'Long',
+          qty: matched,
+          pnl,
+          type: 'Future',
+          fill_price: fillPrice,
+          raw_payload: {
+            ...(row.trade.raw_payload ?? {}),
+            _matched_open_ts: lot.openedAt,
+            _matched_open_price: lot.price,
+            _matched_close_price: fillPrice,
+            _matched_qty: matched
+          }
+        })
+        lot.qty -= matched
+        remaining -= matched
+        if (lot.qty <= 1e-8) longQueue.shift()
+      }
+      if (longQueue.length) {
+        longLots.set(ticker, longQueue.filter((lot) => lot.qty > 0))
+      } else {
+        longLots.delete(ticker)
+      }
+      if (remaining > 0) {
+        const lots = shortLots.get(ticker) ?? []
+        lots.push({ qty: remaining, price: fillPrice, multiplier, openedAt: row.trade.entry_ts ?? null })
+        shortLots.set(ticker, lots)
+      }
+    }
+  }
+
+  return closedTrades
+}
 
 const closeLots = (lots: Lot[], qty: number, exitPrice: number, closingLong: boolean) => {
   let realized = 0
@@ -427,18 +661,7 @@ const closeLots = (lots: Lot[], qty: number, exitPrice: number, closingLong: boo
 }
 
 const getTradeTimestamp = (trade: Partial<Trade>) => {
-  if (trade.entry_ts) {
-    const ts = new Date(trade.entry_ts).getTime()
-    if (!Number.isNaN(ts)) return ts
-  }
-  if (trade.date) {
-    const timePart = trade.time ?? '00:00'
-    const normalized = timePart.length === 5 ? `${timePart}:00` : timePart
-    const iso = `${trade.date}T${normalized}`
-    const ts = new Date(iso.endsWith('Z') ? iso : `${iso}Z`).getTime()
-    if (!Number.isNaN(ts)) return ts
-  }
-  return 0
+  return getTradeDate(trade)?.getTime() ?? 0
 }
 
 const deriveFifoPnl = (rows: ParsedCsvRow[]) => {
@@ -448,6 +671,7 @@ const deriveFifoPnl = (rows: ParsedCsvRow[]) => {
     return getTradeTimestamp(a.trade) - getTradeTimestamp(b.trade)
   })
   ordered.forEach((row) => {
+    row.meta.closedQty = 0
     if (typeof row.trade.pnl === 'number') return
     const ticker = row.trade.ticker
     const qty = row.meta.qty
@@ -497,6 +721,7 @@ const deriveFifoPnl = (rows: ParsedCsvRow[]) => {
     if (closedQty > 0) {
       const feeShare = qtyTotal ? totalFee * (closedQty / qtyTotal) : totalFee
       row.trade.pnl = realized - feeShare
+      row.meta.closedQty = closedQty
     } else if (row.trade.pnl === undefined) {
       row.trade.pnl = 0
     }
@@ -514,66 +739,113 @@ const parseCsv = (text: string, broker: string): Partial<Trade>[] => {
       const record: Record<string, string> = {}
       rawHeaders.forEach((h, idx) => {
         record[h] = cols[idx]?.trim() ?? ''
-        })
-        const entryTs =
-          buildTimestamp(record.entry_ts) ||
-          buildTimestamp(record.timestamp) ||
-          buildTimestamp(record.fill_time) ||
-          buildTimestamp(record.closing_time) ||
-          buildTimestamp(record.placing_time) ||
-          buildTimestamp(record.close_time) ||
-          buildTimestamp(record.open_time) ||
-          buildTimestamp(record.trade_time) ||
-          buildTimestamp(record.date, record.time)
-        const qty = parseNumber(findColumnValue(record, quantityMatchers))
-        const pnlRaw = findColumnValue(record, pnlMatchers) ?? record.change ?? record.status
-        const pnl = parseNumber(pnlRaw)
-        const rawTicker =
-          record.ticker || record.symbol || record.instrument || record.product || record.contract || record.product_description || ''
-        const ticker = normalizeTickerSymbol(rawTicker)
-        const detailSource = detailFieldCandidates
-          .map((key) => record[key])
-          .find((value): value is string => Boolean(value && value.trim()))
-        const inferredSide = inferSideFromDetails(detailSource?.trim())
-        const side = inferredSide ?? normalizeSide(record.side || record.b_s || record.buy_sell || record.order_action)
-        const fillPrice = parseNumber(
-          record.fill_price ||
-            record.fillprice ||
-            record.price ||
-            record.execution_price ||
-            record._price ||
-            record.avgprice ||
-            record.avg_fill_price ||
-            record.decimalfillavg
-        )
-        const commissionValue = parseNumber(record.commission || record.fee || record.fees)
-        const entryDate = entryTs ? new Date(entryTs) : null
-        const qtyValue = typeof qty === 'number' ? Math.abs(qty) : undefined
-        const pnlValue = typeof pnl === 'number' ? pnl : undefined
-        const changeValue = findColumnValue(record, changeMatchers) ?? ''
-        const pointValue = getPointValue(ticker)
-        const trade: Partial<Trade> = {
-          entry_ts: entryTs,
-          date: entryDate ? entryDate.toISOString().slice(0, 10) : record.date || '',
-          time: entryDate ? entryDate.toISOString().slice(11, 16) : record.time || '',
+      })
+      const entryTs =
+        buildTimestamp(record.entry_ts) ||
+        buildTimestamp(record.timestamp) ||
+        buildTimestamp(record.fill_time) ||
+        buildTimestamp(record.closing_time) ||
+        buildTimestamp(record.placing_time) ||
+        buildTimestamp(record.close_time) ||
+        buildTimestamp(record.open_time) ||
+        buildTimestamp(record.trade_time) ||
+        buildTimestamp(record.date, record.time)
+      const qty = parseNumber(findColumnValue(record, quantityMatchers))
+      const filledQty = parseNumber(
+        record.filled_qty ||
+          record.filledqty ||
+          record.fill_qty ||
+          record.filled_quantity ||
+          record.executed_qty
+      )
+      const pnlRaw = findColumnValue(record, pnlMatchers) ?? record.change ?? record.status
+      const pnl = parseNumber(pnlRaw)
+      const rawTicker =
+        record.ticker || record.symbol || record.instrument || record.product || record.contract || record.product_description || ''
+      const ticker = normalizeTickerSymbol(rawTicker)
+      const detailSource = detailFieldCandidates
+        .map((key) => record[key])
+        .find((value): value is string => Boolean(value && value.trim()))
+      const inferredSide = inferSideFromDetails(detailSource?.trim())
+      const side = inferredSide ?? normalizeSide(record.side || record.b_s || record.buy_sell || record.order_action)
+      const fillPrice = parseNumber(
+        record.fill_price ||
+          record.fillprice ||
+          record.price ||
+          record.execution_price ||
+          record._price ||
+          record.avgprice ||
+          record.avg_fill_price ||
+          record.decimalfillavg
+      )
+      const commissionValue = parseNumber(
+        record.commission ||
+          record.commissions ||
+          record.total_commission ||
+          record.total_commissions ||
+          record.total_fee ||
+          record.total_fees ||
+          record.fee ||
+          record.fees
+      )
+      const entryDate = entryTs ? new Date(entryTs) : null
+      const qtyValue = typeof qty === 'number' ? Math.abs(qty) : undefined
+      const pnlValue = typeof pnl === 'number' ? pnl : undefined
+      const changeValue = findColumnValue(record, changeMatchers) ?? ''
+      const normalizedStatus = changeValue.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ')
+      const isTradovateFilled =
+        broker !== 'Tradovate' ||
+        ((normalizedStatus.includes('fill') || normalizedStatus.includes('execut')) &&
+          typeof fillPrice === 'number' &&
+          ((typeof filledQty === 'number' && filledQty > 0) || (typeof qtyValue === 'number' && qtyValue > 0)))
+      const pointValue = getPointValue(ticker)
+      const fallbackTimeSource =
+        record.timestamp ||
+        record.fill_time ||
+        record.filltime ||
+        record.closing_time ||
+        record.fill_time ||
+        record.time ||
+        ''
+      const parsedDateFromSource = normalizeDateOnly(record.date || fallbackTimeSource)
+      const parsedTimeFromSource = extractTimePart(fallbackTimeSource)
+      const normalizedDate = parsedDateFromSource || (entryDate ? formatLocalDate(entryDate) : '')
+      const normalizedTime = parsedTimeFromSource || (entryDate ? formatLocalTime(entryDate) : record.time || '')
+      const trade: Partial<Trade> = {
+        entry_ts: entryTs,
+        date: normalizedDate,
+        time: normalizedTime,
+        side,
+        type: broker === 'Tradovate' ? 'Future' : record.type || record.asset_type || record.product || '',
+        ticker,
+        qty: qtyValue,
+        pnl: pnlValue,
+        change: changeValue,
+        commission: commissionValue ?? null,
+        fill_price: fillPrice ?? null,
+        raw_payload: {
+          ...record,
+          _parsed_entry_ts: entryTs ?? null,
+          _parsed_time: normalizedTime || null,
+          _parsed_date: normalizedDate || null,
+          _parsed_qty: qtyValue ?? null,
+          _parsed_fill_price: fillPrice ?? null,
+          _parsed_commission: commissionValue ?? null
+        }
+      }
+      return {
+        trade,
+        meta: {
           side,
-          type: record.type || record.asset_type || record.product || '',
-          ticker,
           qty: qtyValue,
-          pnl: pnlValue,
-          change: changeValue
+          fillPrice,
+          feePerUnit: qtyValue && commissionValue ? commissionValue / qtyValue : 0,
+          totalFee: commissionValue || 0,
+          pointValue,
+          isTradovateFilled,
+          closedQty: 0
         }
-        return {
-          trade,
-          meta: {
-            side,
-            qty: qtyValue,
-            fillPrice,
-            feePerUnit: qtyValue && commissionValue ? commissionValue / qtyValue : 0,
-            totalFee: commissionValue || 0,
-            pointValue
-          }
-        }
+      }
     })
     .filter(
       (row) =>
@@ -581,13 +853,48 @@ const parseCsv = (text: string, broker: string): Partial<Trade>[] => {
         row.trade.qty !== undefined ||
         row.trade.pnl !== undefined
     )
+      .filter((row) => row.meta.isTradovateFilled !== false)
   if (broker === 'TradingView' || broker === 'Tradovate') {
     deriveFifoPnl(mappedRows)
   }
+
+  if (broker === 'Tradovate') {
+    return buildTradovateClosedTrades(mappedRows)
+  }
+
   return mappedRows.map((row) => row.trade)
 }
 
+const stripOptionalColumns = <T extends Record<string, unknown>>(rows: T[]) => {
+  const optionalKeys = ['raw_payload', 'commission', 'fill_price']
+  return rows.map((row) => {
+    const clone = { ...row }
+    optionalKeys.forEach((key) => {
+      if (key in clone) {
+        delete clone[key]
+      }
+    })
+    return clone as T
+  })
+}
+
+const stripDateTimeColumns = <T extends Record<string, unknown>>(rows: T[]) =>
+  rows.map((row) => {
+    const clone = { ...row }
+    delete clone.date
+    delete clone.time
+    return clone as T
+  })
+
   const handleImport = async () => {
+    const finalizeSuccess = async (message: string) => {
+      setStatus(message)
+      setSelectedFile(null)
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
+      await loadSources(userId)
+    }
     if (!userId) {
       setStatus('Please sign in to import.')
       return
@@ -628,14 +935,15 @@ const parseCsv = (text: string, broker: string): Partial<Trade>[] => {
       const { data: existingTrades, error: existingError } = await supabase
         .from('trades')
         .select('entry_ts,ticker,side,type,qty,pnl,change')
-        .match({ user_id: userId, source_account: trimmedAccount })
+        .match({ user_id: userId, source_account: trimmedAccount, source_broker: selectedBroker })
       if (existingError) {
         setStatus(`Unable to check existing trades: ${existingError.message}`)
         setBusy(false)
         return
       }
+      const existingRows = (existingTrades ?? []) as ExistingTradeRow[]
       const existingKeys = new Set(
-        existingTrades?.map((trade: any) =>
+        existingRows.map((trade) =>
           buildTradeKey({
             entry_ts: trade.entry_ts,
             ticker: trade.ticker,
@@ -652,7 +960,7 @@ const parseCsv = (text: string, broker: string): Partial<Trade>[] => {
         .map((r) => {
           const qtyValue = typeof r.qty === 'number' ? r.qty : null
           const pnlValue = typeof r.pnl === 'number' ? r.pnl : null
-          const isFuture = (r.type || '').toLowerCase().includes('future')
+          const isFuture = selectedBroker === 'Tradovate' || (r.type || '').toLowerCase().includes('future')
           const feeAdjustment = feeValue && qtyValue ? feeValue * Math.abs(qtyValue) : 0
           const adjustedPnl = pnlValue !== null && isFuture && feeAdjustment ? pnlValue - feeAdjustment : pnlValue
           const payload = {
@@ -665,7 +973,12 @@ const parseCsv = (text: string, broker: string): Partial<Trade>[] => {
             pnl: adjustedPnl,
             change: r.change ?? null,
             source_account: trimmedAccount,
-            source_broker: selectedBroker
+            source_broker: selectedBroker,
+            date: r.date || null,
+            time: r.time || null,
+            commission: r.commission ?? null,
+            fill_price: r.fill_price ?? null,
+            raw_payload: r.raw_payload ?? null
           }
           const key = buildTradeKey(payload)
           if (existingKeys.has(key)) {
@@ -674,7 +987,7 @@ const parseCsv = (text: string, broker: string): Partial<Trade>[] => {
           existingKeys.add(key)
           return payload
         })
-        .filter((row): row is NonNullable<typeof row> => Boolean(row))
+        .filter((row): row is InsertTradeRow => row !== null)
       if (!rows.length) {
         setStatus('All trades in this CSV already exist for this account.')
         setBusy(false)
@@ -682,14 +995,25 @@ const parseCsv = (text: string, broker: string): Partial<Trade>[] => {
       }
       const { error } = await supabase.from('trades').insert(rows)
       if (error) {
-        setStatus(`Import failed: ${error.message}`)
-      } else {
-        setStatus(`Imported ${rows.length} trades into ${trimmedAccount}.`)
-        setSelectedFile(null)
-        if (fileInputRef.current) {
-          fileInputRef.current.value = ''
+        const leanRows = stripOptionalColumns(rows)
+        const { error: leanError } = await supabase.from('trades').insert(leanRows)
+        if (leanError) {
+          const leanRowsNoDateTime = stripDateTimeColumns(leanRows)
+          const { error: minimalError } = await supabase.from('trades').insert(leanRowsNoDateTime)
+          if (minimalError) {
+            setStatus(`Import failed: ${minimalError.message}`)
+          } else {
+            await finalizeSuccess(
+              `Imported ${leanRowsNoDateTime.length} trades into ${trimmedAccount}. Date/time and optional broker fields were skipped because those columns are missing in the trades table.`
+            )
+          }
+        } else {
+          await finalizeSuccess(
+            `Imported ${leanRows.length} trades into ${trimmedAccount}. Optional fields (commission/fill_price/raw_payload) were skipped because the trades table is missing those columns.`
+          )
         }
-        await loadSources(userId)
+      } else {
+        await finalizeSuccess(`Imported ${rows.length} trades into ${trimmedAccount}.`)
       }
     } catch (err) {
       setStatus(`Import failed: ${(err as Error).message}`)
@@ -793,6 +1117,96 @@ const parseCsv = (text: string, broker: string): Partial<Trade>[] => {
             {method}
           </button>
         </div>
+
+        {selectedBroker === 'Tradovate' && (
+          <div className="schema-card">
+            <div className="schema-card-header">
+              <div>
+                <div className="label">Tradovate Direct Sync</div>
+                <div className="tiny muted">Credentials are sent only to your Supabase edge function for this sync request.</div>
+              </div>
+            </div>
+            <div className="advanced-grid">
+              <label className="input-group">
+                <span className="label">Environment</span>
+                <select
+                  className="input"
+                  value={syncEnvironment}
+                  onChange={(e) => setSyncEnvironment(e.target.value as 'live' | 'demo')}
+                >
+                  <option value="live">Live</option>
+                  <option value="demo">Demo</option>
+                </select>
+                <span className="tiny muted">Use the same environment you log into in Tradovate. Prop accounts are commonly on Live.</span>
+              </label>
+              <label className="input-group">
+                <span className="label">Tradovate Username</span>
+                <input
+                  className="input"
+                  type="text"
+                  value={tradovateUsername}
+                  onChange={(e) => setTradovateUsername(e.target.value)}
+                  autoComplete="username"
+                  placeholder="Your Tradovate login username or email"
+                />
+                <span className="tiny muted">Enter the actual Tradovate login, not the account name shown in the platform.</span>
+              </label>
+              <label className="input-group">
+                <span className="label">Tradovate Password</span>
+                <input
+                  className="input"
+                  type="password"
+                  value={tradovatePassword}
+                  onChange={(e) => setTradovatePassword(e.target.value)}
+                  autoComplete="current-password"
+                />
+              </label>
+              <label className="input-group">
+                <span className="label">API Secret</span>
+                <input
+                  className="input"
+                  type="password"
+                  value={tradovateSecret}
+                  onChange={(e) => setTradovateSecret(e.target.value)}
+                  placeholder="Optional"
+                />
+                <span className="tiny muted">Leave this empty if your Tradovate login works without an API secret.</span>
+              </label>
+              <label className="input-group">
+                <span className="label">App ID</span>
+                <input
+                  className="input"
+                  type="text"
+                  value={tradovateAppId}
+                  onChange={(e) => setTradovateAppId(e.target.value)}
+                />
+              </label>
+              <label className="input-group">
+                <span className="label">App Version</span>
+                <input
+                  className="input"
+                  type="text"
+                  value={tradovateAppVersion}
+                  onChange={(e) => setTradovateAppVersion(e.target.value)}
+                />
+              </label>
+              <label className="input-group">
+                <span className="label">CID</span>
+                <input
+                  className="input"
+                  type="text"
+                  value={tradovateCid}
+                  onChange={(e) => setTradovateCid(e.target.value)}
+                />
+              </label>
+            </div>
+            <div className="center" style={{ marginTop: 20 }}>
+              <button className="pill-button gradient" type="button" onClick={handleTradovateSync} disabled={syncBusy}>
+                {syncBusy ? 'Syncing…' : 'Sync From Tradovate'}
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="label">Statement Import</div>
         <div className="instructions">

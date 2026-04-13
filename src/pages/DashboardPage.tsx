@@ -5,6 +5,8 @@ import { TradesTable } from '../components/TradesTable'
 import { PageHeader } from '../components/PageHeader'
 import { supabase } from '../supabaseClient'
 import { aggregateStats, formatCurrency, groupMonthlyReturns } from '../utils/stats'
+import { getTradeDate, normalizeTradeRow, type TradeRow } from '../utils/trades'
+import { buildTradeAnalysis, type AnalysisTimeframe } from '../utils/tradeAnalysis'
 
 type Props = {
   trades: Trade[]
@@ -19,9 +21,15 @@ export function DashboardPage({ trades, userId, selectedAccounts = null }: Props
   const [statRange, setStatRange] = useState<keyof typeof statsByRange>('All Time')
   const [statView, setStatView] = useState<'Key Stats' | 'All Stats'>('Key Stats')
   const [monthFocus, setMonthFocus] = useState<keyof typeof monthReturnsByMonth>('November 2025')
+  const [analysisRange, setAnalysisRange] = useState<AnalysisTimeframe>('daily')
 
   useEffect(() => {
     const fetchTrades = async () => {
+      if (!userId) {
+        setLoadedTrades([])
+        setLoading(false)
+        return
+      }
       if (selectedAccounts !== null && !selectedAccounts.length) {
         setLoadedTrades([])
         setLoading(false)
@@ -42,18 +50,7 @@ export function DashboardPage({ trades, userId, selectedAccounts = null }: Props
         setLoading(false)
         return
       }
-      const normalized: Trade[] =
-        data?.map((t: any) => ({
-          date: t.date ?? (t.entry_ts ? new Date(t.entry_ts).toISOString().slice(0, 10) : ''),
-          time: t.time ?? (t.entry_ts ? new Date(t.entry_ts).toISOString().slice(11, 16) : ''),
-          side: t.side ?? '',
-          type: t.type ?? '',
-          ticker: t.ticker ?? '',
-          qty: Number(t.qty) || 0,
-          pnl: Number(t.pnl) || 0,
-          change: t.change ?? '',
-          entry_ts: t.entry_ts ?? null
-        })) ?? []
+      const normalized: Trade[] = ((data ?? []) as TradeRow[]).map((row) => normalizeTradeRow(row))
       setLoadedTrades(normalized)
       setLoading(false)
     }
@@ -67,7 +64,8 @@ export function DashboardPage({ trades, userId, selectedAccounts = null }: Props
     const days = statRange === 'Last 30D' ? 30 : 7
     const cutoff = now.getTime() - days * 24 * 60 * 60 * 1000
     return activeTrades.filter((t) => {
-      const dt = t.entry_ts ? new Date(t.entry_ts) : new Date(`${t.date}T${t.time}:00Z`)
+      const dt = getTradeDate(t)
+      if (!dt) return false
       return dt.getTime() >= cutoff
     })
   }, [activeTrades, statRange])
@@ -93,6 +91,14 @@ export function DashboardPage({ trades, userId, selectedAccounts = null }: Props
 
   const monthList = Object.keys(monthReturnsByMonth) as (keyof typeof monthReturnsByMonth)[]
   const monthIndex = monthList.indexOf(monthFocus)
+  const analysisByRange = useMemo(() => buildTradeAnalysis(activeTrades), [activeTrades])
+  const activeAnalysis = analysisByRange[analysisRange]
+
+  const formatDetailedCurrency = (value: number) =>
+    `${value < 0 ? '-' : ''}$${Math.abs(value).toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    })}`
 
   const goPrevMonth = () => {
     if (monthIndex < monthList.length - 1) {
@@ -209,20 +215,81 @@ export function DashboardPage({ trades, userId, selectedAccounts = null }: Props
           </div>
         </section>
 
-        <section className="panel insight">
-          <div className="panel-title">AI Insight</div>
-          <p>
-            Add more trading data to get personalized analysis and insights to help you improve your
-            strategy.
-          </p>
-          <p>
-            Our AI will analyze your trading patterns and identify strengths and weaknesses in your
-            approach to the markets.
-          </p>
-          <p>
-            Receive actionable recommendations tailored to your specific trading style that can help
-            boost your performance.
-          </p>
+        <section className="panel analysis-panel">
+          <div className="panel-header">
+            <div className="panel-title">Analysis</div>
+            <div className="stats-tabs">
+              {(['daily', 'weekly', 'monthly', 'yearly'] as const).map((range) => (
+                <button
+                  key={range}
+                  type="button"
+                  className={`tab ${analysisRange === range ? 'filled' : ''}`}
+                  onClick={() => setAnalysisRange(range)}
+                >
+                  {range[0].toUpperCase() + range.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="analysis-grid">
+            <div className="analysis-metric">
+              <span>Trades</span>
+              <strong>{activeAnalysis.tradeCount}</strong>
+            </div>
+            <div className="analysis-metric">
+              <span>Net P/L</span>
+              <strong>{formatDetailedCurrency(activeAnalysis.netPnl)}</strong>
+            </div>
+            <div className="analysis-metric">
+              <span>Win Rate</span>
+              <strong>{activeAnalysis.winRate.toFixed(1)}%</strong>
+            </div>
+            <div className="analysis-metric">
+              <span>Profit Factor</span>
+              <strong>{Number.isFinite(activeAnalysis.profitFactor) ? activeAnalysis.profitFactor.toFixed(2) : 'Infinity'}</strong>
+            </div>
+            <div className="analysis-metric">
+              <span>Expectancy</span>
+              <strong>{formatDetailedCurrency(activeAnalysis.expectancy)}</strong>
+            </div>
+            <div className="analysis-metric">
+              <span>Avg Contracts</span>
+              <strong>{activeAnalysis.avgContracts.toFixed(2)}</strong>
+            </div>
+          </div>
+
+          <div className="analysis-summary-row">
+            <span>Best {activeAnalysis.periodLabel}</span>
+            <strong>
+              {activeAnalysis.bestPeriod
+                ? `${activeAnalysis.bestPeriod.label} (${formatDetailedCurrency(activeAnalysis.bestPeriod.pnl)})`
+                : 'N/A'}
+            </strong>
+          </div>
+          <div className="analysis-summary-row">
+            <span>Worst {activeAnalysis.periodLabel}</span>
+            <strong>
+              {activeAnalysis.worstPeriod
+                ? `${activeAnalysis.worstPeriod.label} (${formatDetailedCurrency(activeAnalysis.worstPeriod.pnl)})`
+                : 'N/A'}
+            </strong>
+          </div>
+
+          <div className="analysis-summary-row">
+            <span>Top Ticker</span>
+            <strong>
+              {activeAnalysis.bestTicker
+                ? `${activeAnalysis.bestTicker.ticker} (${formatDetailedCurrency(activeAnalysis.bestTicker.pnl)})`
+                : 'N/A'}
+            </strong>
+          </div>
+
+          <div className="analysis-notes">
+            {activeAnalysis.insights.map((line) => (
+              <p key={line}>{line}</p>
+            ))}
+          </div>
         </section>
       </div>
 

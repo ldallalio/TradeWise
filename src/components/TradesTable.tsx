@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import type { Trade } from '../data/mockData'
 import { formatCurrency } from '../utils/stats'
 import { shouldHideFilledZeroPnl } from '../utils/tradeFilters'
@@ -13,24 +13,20 @@ export function TradesTable({ trades, title, pageSize = 10 }: Props) {
   const [page, setPage] = useState(1)
   const visibleTrades = trades.filter((trade) => !shouldHideFilledZeroPnl(trade))
   const totalPages = Math.max(1, Math.ceil(visibleTrades.length / pageSize))
-
-  useEffect(() => {
-    setPage(1)
-  }, [trades, pageSize])
-
-  const paginatedTrades = visibleTrades.slice((page - 1) * pageSize, page * pageSize)
+  const currentPage = Math.min(page, totalPages)
+  const paginatedTrades = visibleTrades.slice((currentPage - 1) * pageSize, currentPage * pageSize)
   return (
     <section className="panel table">
       <div className="panel-header">
         <div className="panel-title">{title}</div>
         <div className="table-pagination">
-          <button className="small-btn" type="button" onClick={() => setPage((p: number) => Math.max(1, p - 1))} disabled={page === 1}>
+          <button className="small-btn" type="button" onClick={() => setPage((p: number) => Math.max(1, p - 1))} disabled={currentPage === 1}>
             ‹
           </button>
           <span className="muted tiny">
-            Page {page} / {totalPages}
+            Page {currentPage} / {totalPages}
           </span>
-          <button className="small-btn" type="button" onClick={() => setPage((p: number) => Math.min(totalPages, p + 1))} disabled={page === totalPages}>
+          <button className="small-btn" type="button" onClick={() => setPage((p: number) => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}>
             ›
           </button>
         </div>

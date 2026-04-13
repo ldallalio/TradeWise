@@ -3,6 +3,7 @@ import type { Trade } from '../data/mockData'
 import { PageHeader } from '../components/PageHeader'
 import { TradesTable } from '../components/TradesTable'
 import { supabase } from '../supabaseClient'
+import { normalizeTradeRow, type TradeRow } from '../utils/trades'
 
 type Props = {
   trades: Trade[]
@@ -18,6 +19,11 @@ export function TradesPage({ trades, userId, selectedAccounts = null }: Props) {
 
   useEffect(() => {
     const fetchTrades = async () => {
+      if (!userId) {
+        setLoadedTrades([])
+        setLoading(false)
+        return
+      }
       if (selectedAccounts !== null && !selectedAccounts.length) {
         setLoadedTrades([])
         setLoading(false)
@@ -38,18 +44,7 @@ export function TradesPage({ trades, userId, selectedAccounts = null }: Props) {
         setLoading(false)
         return
       }
-      const normalized: Trade[] =
-        data?.map((t: any) => ({
-          date: t.date ?? (t.entry_ts ? new Date(t.entry_ts).toISOString().slice(0, 10) : ''),
-          time: t.time ?? (t.entry_ts ? new Date(t.entry_ts).toISOString().slice(11, 16) : ''),
-          side: t.side ?? '',
-          type: t.type ?? '',
-          ticker: t.ticker ?? '',
-          qty: Number(t.qty) || 0,
-          pnl: Number(t.pnl) || 0,
-          change: t.change ?? '',
-          entry_ts: t.entry_ts ?? null
-        })) ?? []
+      const normalized: Trade[] = ((data ?? []) as TradeRow[]).map((row) => normalizeTradeRow(row))
       setLoadedTrades(normalized)
       setLoading(false)
     }

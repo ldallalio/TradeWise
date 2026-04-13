@@ -1,4 +1,5 @@
 import type { Trade } from '../data/mockData'
+import { getTradeDate } from './trades'
 
 export type AggregateStats = {
   cumulativeReturn: number
@@ -19,7 +20,11 @@ export function aggregateStats(trades: Trade[]): AggregateStats {
   const losses = trades.filter((t) => t.pnl < 0)
   const winSum = wins.reduce((sum, t) => sum + t.pnl, 0)
   const lossSum = losses.reduce((sum, t) => sum + t.pnl, 0) // negative
-  const profitFactor = wins.length && lossSum !== 0 ? winSum / Math.abs(lossSum) : 0
+  const profitFactor = wins.length
+    ? lossSum !== 0
+      ? winSum / Math.abs(lossSum)
+      : Infinity
+    : 0
   const averageReturn = totalPnl / trades.length
   const countedTrades = wins.length + losses.length
   const winRate = countedTrades ? (wins.length / countedTrades) * 100 : 0
@@ -39,8 +44,8 @@ export function groupMonthlyReturns(trades: Trade[], monthFocus: string) {
 
   const buckets = new Map<string, number>()
   trades.forEach((trade) => {
-    const dateStr = trade.entry_ts ?? `${trade.date}T${trade.time}:00Z`
-    const d = new Date(dateStr)
+    const d = getTradeDate(trade)
+    if (!d) return
     if (d.getFullYear() === yearNum && d.getMonth() === monthIndex) {
       const day = `${d.getDate()}`.padStart(2, '0')
       buckets.set(day, (buckets.get(day) ?? 0) + trade.pnl)

@@ -1,15 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { NavLink, Route, Routes, useNavigate, useLocation } from 'react-router-dom'
+import { NavLink, Route, Routes, useNavigate } from 'react-router-dom'
 import './App.css'
 import { trades } from './data/mockData'
 import { DashboardPage } from './pages/DashboardPage'
 import { CalendarPage } from './pages/CalendarPage'
 import { TradesPage } from './pages/TradesPage'
-import { PlaceholderPage } from './pages/PlaceholderPage'
-import { LockedPage } from './pages/LockedPage'
 import { supabase } from './supabaseClient'
 import type { Session } from '@supabase/supabase-js'
 import { ImportPage } from './pages/ImportPage'
+import { AnalysisPage } from './pages/AnalysisPage'
+import { JournalPage } from './pages/JournalPage'
+
+type AccountRow = {
+  source_account: string | null
+  source_broker: string | null
+}
 
 type NavItem = {
   label: string
@@ -22,15 +27,13 @@ const navItems: NavItem[] = [
   { label: 'Dashboard', to: '/', icon: 'icon-dashboard' },
   { label: 'Calendar', to: '/calendar', icon: 'icon-calendar' },
   { label: 'Trades', to: '/trades', icon: 'icon-bar' },
-  { label: 'Analysis', to: '/analysis', icon: 'icon-chart' },
   { label: 'Import', to: '/import', icon: 'icon-chart' },
-  { label: 'Insights', to: '/insights', icon: 'icon-spark', locked: true },
-  { label: 'Journal', to: '/journal', icon: 'icon-note', locked: true }
+  { label: 'Analysis', to: '/analysis', icon: 'icon-spark' },
+  { label: 'Journal', to: '/journal', icon: 'icon-note' }
 ]
 
 export default function App() {
   const navigate = useNavigate()
-  const location = useLocation()
   const [session, setSession] = useState<Session | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
   const [authError, setAuthError] = useState<string | null>(null)
@@ -40,7 +43,11 @@ export default function App() {
   const [accountOptions, setAccountOptions] = useState<{ id: string; broker: string }[]>([])
   const [selectedAccounts, setSelectedAccounts] = useState<string[] | null>(null)
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
+  const [privacyMode, setPrivacyMode] = useState(() => localStorage.getItem('tw-privacy') === '1')
+  const [lightMode, setLightMode] = useState(() => localStorage.getItem('tw-light') === '1')
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const accountDropdownRef = useRef<HTMLDivElement | null>(null)
+  const settingsRef = useRef<HTMLDivElement | null>(null)
 
   const loadAccountOptions = useCallback(
     async (uid?: string) => {
@@ -58,8 +65,9 @@ export default function App() {
         console.error('Unable to load accounts', error)
         return
       }
+      const rows = (data ?? []) as AccountRow[]
       const unique = new Map<string, { id: string; broker: string }>()
-      data?.forEach((row: any) => {
+      rows.forEach((row) => {
         const id = row.source_account
         if (!id) return
         if (!unique.has(id)) {
@@ -128,6 +136,30 @@ export default function App() {
     }
   }, [accountDropdownOpen])
 
+  useEffect(() => {
+    localStorage.setItem('tw-privacy', privacyMode ? '1' : '0')
+  }, [privacyMode])
+
+  useEffect(() => {
+    localStorage.setItem('tw-light', lightMode ? '1' : '0')
+    if (lightMode) {
+      document.documentElement.classList.add('light-theme')
+    } else {
+      document.documentElement.classList.remove('light-theme')
+    }
+  }, [lightMode])
+
+  useEffect(() => {
+    if (!settingsOpen) return
+    const handleClick = (e: MouseEvent) => {
+      if (settingsRef.current && !settingsRef.current.contains(e.target as Node)) {
+        setSettingsOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [settingsOpen])
+
   const toggleAccountSelection = (accountId: string) => {
     setSelectedAccounts((prev) => {
       if (prev === null) {
@@ -154,17 +186,18 @@ export default function App() {
     return `${selectedAccounts.length} accounts`
   }, [selectedAccounts, accountIds.length])
 
-  useEffect(() => {
-    if (!mobileSidebarOpen) {
-      setAccountDropdownOpen(false)
-    }
-  }, [mobileSidebarOpen])
+  if (authLoading) {
+    return (
+      <div className="login-screen">
+        <div className="login-card panel">
+          <h1>TraderWise</h1>
+          <p className="subtle">Loading your journal…</p>
+        </div>
+      </div>
+    )
+  }
 
-  useEffect(() => {
-    setMobileSidebarOpen(false)
-  }, [location.pathname])
-
-  if (!session && !authLoading) {
+  if (!session) {
     return (
       <div className="login-screen">
         <div className="login-card panel">
@@ -207,7 +240,15 @@ export default function App() {
         <button
           className="mobile-sidebar-toggle"
           type="button"
-          onClick={() => setMobileSidebarOpen((open) => !open)}
+          onClick={() => {
+            setMobileSidebarOpen((open) => {
+              const next = !open
+              if (!next) {
+                setAccountDropdownOpen(false)
+              }
+              return next
+            })
+          }}
         >
           <div>
             <span className="mobile-brand">TraderWise</span>
@@ -221,7 +262,10 @@ export default function App() {
             to="/"
             className="brand"
             onClick={() => {
-              if (mobileSidebarOpen) setMobileSidebarOpen(false)
+              if (mobileSidebarOpen) {
+                setMobileSidebarOpen(false)
+                setAccountDropdownOpen(false)
+              }
             }}
           >
             <div className="brand-icon" />
@@ -296,7 +340,10 @@ export default function App() {
                     e.preventDefault()
                     return
                   }
-                  if (mobileSidebarOpen) setMobileSidebarOpen(false)
+                  if (mobileSidebarOpen) {
+                    setMobileSidebarOpen(false)
+                    setAccountDropdownOpen(false)
+                  }
                 }}
               >
                 <span className={`icon ${item.icon} ${item.locked ? 'muted' : ''}`} />
@@ -312,7 +359,10 @@ export default function App() {
               type="button"
               onClick={() => {
                 navigate('/import')
-                if (mobileSidebarOpen) setMobileSidebarOpen(false)
+                if (mobileSidebarOpen) {
+                  setMobileSidebarOpen(false)
+                  setAccountDropdownOpen(false)
+                }
               }}
             >
               ⬇ Import
@@ -322,26 +372,88 @@ export default function App() {
       </aside>
 
       <main className="content">
-        <div className="page-wrap">
+        <div className="app-toolbar">
+          <button
+            className={`circle-btn${privacyMode ? ' active' : ''}`}
+            aria-label="Toggle privacy mode"
+            title={privacyMode ? 'Privacy mode on' : 'Privacy mode off'}
+            onClick={() => setPrivacyMode((v) => !v)}
+          >
+            👁️
+          </button>
+          <button
+            className={`circle-btn${lightMode ? ' active' : ''}`}
+            aria-label="Toggle theme"
+            title={lightMode ? 'Switch to dark' : 'Switch to light'}
+            onClick={() => setLightMode((v) => !v)}
+          >
+            🌙
+          </button>
+          <div className="settings-wrap" ref={settingsRef}>
+            <button
+              className={`circle-btn${settingsOpen ? ' active' : ''}`}
+              aria-label="Settings"
+              title="Settings"
+              onClick={() => setSettingsOpen((v) => !v)}
+            >
+              ⚙️
+            </button>
+            {settingsOpen && (
+              <div className="settings-dropdown">
+                <div className="settings-title">Settings</div>
+                <button
+                  className="settings-item"
+                  type="button"
+                  onClick={() => {
+                    const keys = Object.keys(localStorage).filter((k) => k.startsWith('tradewise-'))
+                    keys.forEach((k) => localStorage.removeItem(k))
+                    setSettingsOpen(false)
+                  }}
+                >
+                  🗑️ Clear local cache
+                </button>
+                <div className="settings-divider" />
+                <div className="settings-info">TraderWise · v0.1.0</div>
+              </div>
+            )}
+          </div>
+        </div>
+        <div className={`page-wrap${privacyMode ? ' privacy-mode' : ''}`}>
           <Routes>
             <Route
               path="/"
               element={
-                <DashboardPage trades={trades} userId={session?.user?.id} selectedAccounts={selectedAccounts} />
+                <DashboardPage trades={trades} userId={session.user.id} selectedAccounts={selectedAccounts} />
               }
             />
             <Route
               path="/calendar"
-              element={<CalendarPage userId={session?.user?.id} selectedAccounts={selectedAccounts} />}
+              element={<CalendarPage userId={session.user.id} selectedAccounts={selectedAccounts} />}
             />
             <Route
               path="/trades"
-              element={<TradesPage trades={trades} userId={session?.user?.id} selectedAccounts={selectedAccounts} />}
+              element={<TradesPage trades={trades} userId={session.user.id} selectedAccounts={selectedAccounts} />}
             />
-            <Route path="/import" element={<ImportPage userId={session?.user?.id} />} />
-            <Route path="/analysis" element={<PlaceholderPage title="Analysis" />} />
-            <Route path="/insights" element={<LockedPage title="Insights" />} />
-            <Route path="/journal" element={<LockedPage title="Journal" />} />
+            <Route path="/import" element={<ImportPage userId={session.user.id} />} />
+            <Route
+              path="/analysis"
+              element={<AnalysisPage trades={trades} userId={session.user.id} selectedAccounts={selectedAccounts} />}
+            />
+            <Route
+              path="/insights"
+              element={
+                <AnalysisPage
+                  trades={trades}
+                  userId={session.user.id}
+                  selectedAccounts={selectedAccounts}
+                  defaultView="insights"
+                />
+              }
+            />
+            <Route
+              path="/journal"
+              element={<JournalPage trades={trades} userId={session.user.id} selectedAccounts={selectedAccounts} />}
+            />
           </Routes>
         </div>
       </main>

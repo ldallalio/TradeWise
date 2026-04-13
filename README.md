@@ -1,73 +1,84 @@
-# React + TypeScript + Vite
+# TradeWise
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React + TypeScript + Vite app for importing broker CSVs into Supabase and visualizing performance (dashboard, trades table, calendar).
 
-Currently, two official plugins are available:
+## Features
+- CSV import with broker-aware parsing (Tradovate, TradingView; generic fallback); deduplicates by a stable trade key.
+- Direct Tradovate sync through a Supabase Edge Function, so you can pull fills without exporting CSVs.
+- Normalizes timestamps, sides, tickers, quantities, PnL; captures commissions/fill prices and raw CSV payload when schema allows.
+- Futures PnL adjusts for extra per-contract fees (configurable in the UI).
+- Dashboard cards, trades table with pagination, and calendar stats backed by Supabase.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## Getting Started
+1) Install dependencies:
+```bash
+npm install
+```
+2) Configure Supabase env vars (create `.env.local`):
+```bash
+VITE_SUPABASE_URL=your-supabase-url
+VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
+```
+3) Run the dev server:
+```bash
+npm run dev
+```
+4) Lint:
+```bash
+npm run lint
+```
+5) Build / preview:
+```bash
+npm run build
+npm run preview
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## Tradovate Direct Sync
+TradeWise includes a server-side Tradovate sync function at [supabase/functions/tradovate-sync/index.ts](supabase/functions/tradovate-sync/index.ts).
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+Setup:
+1. Deploy the edge function:
+```bash
+supabase functions deploy tradovate-sync
 ```
+2. Sign in to the app, open Import, choose Tradovate, and use the Direct Sync form.
+3. Enter your Tradovate username, password, and environment. Add an API secret only if your Tradovate account requires one.
+
+Notes:
+- Credentials are sent to the Supabase Edge Function for the sync request; the app does not persist them.
+- The API secret is optional in TradeWise; if Tradovate accepts username/password auth for your account, leave it blank.
+- The sync currently imports fills and derives realized PnL using the same FIFO logic used by the CSV importer.
+- Commission breakdown is not yet pulled from Tradovate fee records, so synced trades land with `commission = null` for now.
+- The function relies on your Supabase project’s default function secrets: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY`.
+
+## Supabase Schema (trades table)
+Recommended columns (all lowercase):
+- `id` (uuid, primary key, default uuid_generate_v4())  
+- `user_id` (uuid)  
+- `entry_ts` (timestamptz)  
+- `date` (text or date)  
+- `time` (text)  
+- `side` (text)  
+- `type` (text)  
+- `ticker` (text)  
+- `qty` (numeric)  
+- `pnl` (numeric)  
+- `change` (text)  
+- `source_account` (text)  
+- `source_broker` (text)  
+- Optional but used when present: `commission` (numeric), `fill_price` (numeric), `raw_payload` (jsonb)
+
+Notes:
+- If optional columns are missing, imports will retry without them so data still lands; add the columns for full fidelity and re-import.
+- Timestamps are parsed in local time from broker CSVs; dashboard/trades pages display using the viewer’s local timezone.
+
+## Import Tips
+- Tradovate: export Account Statements CSV (contains Timestamp/Fill Time). The importer keeps the raw row in `raw_payload` when possible.
+- TradingView: use Export in History; closing/placing times are parsed; symbol normalization handles CME_MINI:NQ to `NQ`.
+- Extra fees field in the import UI applies per futures contract, per side, and adjusts futures PnL calculation.
+- “Import data starting from” filter keeps later trades only.
+
+## Troubleshooting
+- Missing column errors (e.g., `commission`, `date`, `raw_payload`): the importer falls back without those fields. Add the columns to Supabase and re-import for complete data.
+- Wrong times: confirm the CSV contains local times; importer parses `Timestamp`/`Fill Time`/`Date + Time` as local and stores them. Existing rows with `00:00` need re-import after schema is updated.
+- No trades imported: the dedupe key is built from entry_ts/ticker/side/type/qty/pnl/change. If you need to force-import, tweak the CSV or delete existing conflicting rows for that account.
