@@ -349,6 +349,14 @@ export function ImportPage({ userId }: Props) {
   const [tradovateCid, setTradovateCid] = useState('0')
   const [tradovateSecret, setTradovateSecret] = useState('')
   const [syncBusy, setSyncBusy] = useState(false)
+  const [sectionOpen, setSectionOpen] = useState({
+    sources: false,
+    tradovateSync: false,
+    instructions: false,
+    schema: false,
+    advanced: false,
+    support: false
+  })
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const dropdownRef = useRef<HTMLDivElement | null>(null)
   const filteredBrokers = brokers.filter((broker) =>
@@ -1023,6 +1031,9 @@ const stripDateTimeColumns = <T extends Record<string, unknown>>(rows: T[]) =>
 
   const instructionSteps = instructionsByBroker[selectedBroker] ?? instructionsByBroker.Default
   const selectedSchema = brokerSchemas[selectedBroker] ?? brokerSchemas.Default
+  const toggleSection = (key: keyof typeof sectionOpen) => {
+    setSectionOpen((prev) => ({ ...prev, [key]: !prev[key] }))
+  }
 
   return (
     <>
@@ -1031,8 +1042,11 @@ const stripDateTimeColumns = <T extends Record<string, unknown>>(rows: T[]) =>
       <section className="panel">
         <div className="panel-header">
           <div className="panel-title">Your Import Sources</div>
+          <button type="button" className="small-btn" onClick={() => toggleSection('sources')}>
+            {sectionOpen.sources ? 'Collapse' : 'Expand'}
+          </button>
         </div>
-        <div className="table-body">
+        {sectionOpen.sources ? <div className="table-body">
           <div className="table-head">
             <span>Account ID</span>
             <span>Type</span>
@@ -1071,7 +1085,7 @@ const stripDateTimeColumns = <T extends Record<string, unknown>>(rows: T[]) =>
               <span className="muted">No sources yet. Add your first import below.</span>
             </div>
           )}
-        </div>
+        </div> : <p className="muted tiny">Expand to manage previously imported accounts and delete old sources.</p>}
       </section>
 
       <section className="panel import-panel">
@@ -1125,8 +1139,11 @@ const stripDateTimeColumns = <T extends Record<string, unknown>>(rows: T[]) =>
                 <div className="label">Tradovate Direct Sync</div>
                 <div className="tiny muted">Credentials are sent only to your Supabase edge function for this sync request.</div>
               </div>
+              <button type="button" className="small-btn" onClick={() => toggleSection('tradovateSync')}>
+                {sectionOpen.tradovateSync ? 'Collapse' : 'Expand'}
+              </button>
             </div>
-            <div className="advanced-grid">
+            {sectionOpen.tradovateSync ? <div className="advanced-grid">
               <label className="input-group">
                 <span className="label">Environment</span>
                 <select
@@ -1199,24 +1216,31 @@ const stripDateTimeColumns = <T extends Record<string, unknown>>(rows: T[]) =>
                   onChange={(e) => setTradovateCid(e.target.value)}
                 />
               </label>
-            </div>
-            <div className="center" style={{ marginTop: 20 }}>
+            </div> : <p className="muted tiny">Expand to sync directly from Tradovate instead of importing a CSV statement.</p>}
+            {sectionOpen.tradovateSync ? <div className="center" style={{ marginTop: 20 }}>
               <button className="pill-button gradient" type="button" onClick={handleTradovateSync} disabled={syncBusy}>
                 {syncBusy ? 'Syncing…' : 'Sync From Tradovate'}
               </button>
-            </div>
+            </div> : null}
           </div>
         )}
 
         <div className="label">Statement Import</div>
         <div className="instructions">
-          <div className="instructions-title">Instructions</div>
-          <div className="instructions-subtitle">Steps:</div>
-          <ul>
+          <div className="panel-header compact-panel-header">
+            <div>
+              <div className="instructions-title">Instructions</div>
+              <div className="instructions-subtitle">Steps for {selectedBroker}</div>
+            </div>
+            <button type="button" className="small-btn" onClick={() => toggleSection('instructions')}>
+              {sectionOpen.instructions ? 'Collapse' : 'Expand'}
+            </button>
+          </div>
+          {sectionOpen.instructions ? <ul>
             {instructionSteps.map((step) => (
               <li key={step}>{step}</li>
             ))}
-          </ul>
+          </ul> : <p className="muted tiny">Expand for broker-specific export steps.</p>}
         </div>
         <div className="schema-card">
           <div className="schema-card-header">
@@ -1226,7 +1250,11 @@ const stripDateTimeColumns = <T extends Record<string, unknown>>(rows: T[]) =>
                 <div className="tiny muted">Example file name: {selectedSchema.filePattern}</div>
               )}
             </div>
+            <button type="button" className="small-btn" onClick={() => toggleSection('schema')}>
+              {sectionOpen.schema ? 'Collapse' : 'Expand'}
+            </button>
           </div>
+          {sectionOpen.schema ? <>
           {selectedSchema.notes && <p className="tiny muted">{selectedSchema.notes}</p>}
           {selectedSchema.columns.length ? (
             <div className="schema-table">
@@ -1249,7 +1277,7 @@ const stripDateTimeColumns = <T extends Record<string, unknown>>(rows: T[]) =>
             </div>
           ) : (
             <div className="tiny muted">No schema defined yet. Use the Generic CSV format for best results.</div>
-          )}
+          )}</> : <p className="muted tiny">Expand to inspect expected columns and file examples.</p>}
         </div>
 
         <div className="upload-box large">
@@ -1257,11 +1285,18 @@ const stripDateTimeColumns = <T extends Record<string, unknown>>(rows: T[]) =>
           <div>{selectedFile ? selectedFile.name : 'Drag n drop a file here, or click to select a file'}</div>
         </div>
 
-        <button className="advanced-toggle" type="button" onClick={() => setShowAdvanced((prev) => !prev)}>
+        <button
+          className="advanced-toggle"
+          type="button"
+          onClick={() => {
+            setShowAdvanced((prev) => !prev)
+            toggleSection('advanced')
+          }}
+        >
           <span>Advanced Options</span>
-          <span className={`chevron ${showAdvanced ? 'open' : ''}`}>▾</span>
+          <span className={`chevron ${showAdvanced && sectionOpen.advanced ? 'open' : ''}`}>▾</span>
         </button>
-        {showAdvanced && (
+        {showAdvanced && sectionOpen.advanced && (
           <div className="advanced-grid">
             <label className="input-group">
               <span className="label">Account</span>
@@ -1310,11 +1345,16 @@ const stripDateTimeColumns = <T extends Record<string, unknown>>(rows: T[]) =>
       </section>
 
       <section className="panel subtle">
-        <div className="panel-title">Can't Find Your Broker?</div>
-        <p className="muted">
+        <div className="panel-header compact-panel-header">
+          <div className="panel-title">Can't Find Your Broker?</div>
+          <button type="button" className="small-btn" onClick={() => toggleSection('support')}>
+            {sectionOpen.support ? 'Collapse' : 'Expand'}
+          </button>
+        </div>
+        {sectionOpen.support ? <p className="muted">
           We're constantly expanding broker support. Send us a message or submit a feature request and we'll typically add
           CSV import support for new brokers within a week.
-        </p>
+        </p> : <p className="muted tiny">Expand for broker support info.</p>}
       </section>
     </>
   )

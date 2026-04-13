@@ -841,6 +841,18 @@ html.light-theme {
   margin-bottom: 10px;
 }
 
+.panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.compact-panel-header {
+  margin-bottom: 0;
+}
+
 .panel-title {
   font-weight: 700;
   font-size: 18px;
@@ -1108,6 +1120,11 @@ html.light-theme {
   gap: 10px;
 }
 
+.analysis-collapsible-panel {
+  display: grid;
+  gap: 10px;
+}
+
 .analysis-summary-cards {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1224,6 +1241,10 @@ html.light-theme {
   gap: 5px;
 }
 
+.analysis-symbol-table-expanded {
+  margin-top: 0;
+}
+
 .analysis-symbol-head,
 .analysis-symbol-row {
   display: grid;
@@ -1274,6 +1295,72 @@ html.light-theme {
   display: grid;
   grid-template-columns: 1fr 220px;
   gap: 10px;
+}
+
+.journal-mistake-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.journal-scorecard {
+  background: #0f111c;
+  border: 1px solid #24283c;
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.journal-scorecard h3 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+
+.journal-score-rows {
+  display: grid;
+}
+
+.journal-review-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.journal-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.journal-review-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.journal-review-card {
+  background: #0f111c;
+  border: 1px solid #24283c;
+  border-radius: 12px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.journal-review-card span {
+  font-size: 12px;
+  color: #9ea2b8;
+}
+
+.journal-review-card strong {
+  font-size: 14px;
+  color: #f3f4ff;
+  line-height: 1.4;
+}
+
+.journal-review-wide {
+  grid-column: span 3;
 }
 
 .journal-textarea {
@@ -1930,6 +2017,11 @@ html.light-theme {
     padding: 18px;
   }
 
+  .panel-header,
+  .panel-header-actions {
+    align-items: flex-start;
+  }
+
   .grid.two {
     grid-template-columns: 1fr;
   }
@@ -1954,6 +2046,18 @@ html.light-theme {
 
   .analysis-grid {
     grid-template-columns: 1fr;
+  }
+
+  .journal-review-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .journal-review-wide {
+    grid-column: span 1;
+  }
+
+  .journal-review-actions {
+    justify-content: flex-start;
   }
 
   .table-head,
@@ -2128,4 +2232,29 @@ html.light-theme .nav-item:hover {
 
 html.light-theme .nav-item.active:hover {
   background: #e4e7f8;
+}
+
+html.light-theme .journal-scorecard {
+  background: #f7f8fe;
+  border-color: #d4d7ec;
+}
+
+html.light-theme .journal-review-card {
+  background: #f7f8fe;
+  border-color: #d4d7ec;
+}
+
+html.light-theme .journal-review-card span {
+  color: #6b6f90;
+}
+
+html.light-theme .journal-review-card strong {
+  color: #1e2040;
+}
+
+html.light-theme .journal-review-actions .small-btn,
+html.light-theme .journal-review-actions .chip {
+  background: #f3f4fc;
+  border-color: #d4d7ec;
+  color: #4a4f72;
 }

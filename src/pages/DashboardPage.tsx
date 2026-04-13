@@ -20,8 +20,15 @@ export function DashboardPage({ trades, userId, selectedAccounts = null }: Props
   const [error, setError] = useState<string | null>(null)
   const [statRange, setStatRange] = useState<keyof typeof statsByRange>('All Time')
   const [statView, setStatView] = useState<'Key Stats' | 'All Stats'>('Key Stats')
-  const [monthFocus, setMonthFocus] = useState<keyof typeof monthReturnsByMonth>('November 2025')
+  const [monthFocus, setMonthFocus] = useState('')
   const [analysisRange, setAnalysisRange] = useState<AnalysisTimeframe>('daily')
+  const [sectionOpen, setSectionOpen] = useState({
+    badges: false,
+    tip: false,
+    monthReturns: true,
+    analysis: false,
+    trades: false
+  })
 
   useEffect(() => {
     const fetchTrades = async () => {
@@ -71,6 +78,27 @@ export function DashboardPage({ trades, userId, selectedAccounts = null }: Props
   }, [activeTrades, statRange])
 
   const computedStats = useMemo(() => aggregateStats(filteredByRange), [filteredByRange])
+  const monthList = useMemo(() => {
+    const formatter = new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' })
+    const dynamic = Array.from(
+      new Set(
+        activeTrades
+          .map((trade) => getTradeDate(trade))
+          .filter((date): date is Date => Boolean(date))
+          .sort((left, right) => right.getTime() - left.getTime())
+          .map((date) => formatter.format(date))
+      )
+    )
+    return dynamic.length ? dynamic : (Object.keys(monthReturnsByMonth) as string[])
+  }, [activeTrades])
+
+  useEffect(() => {
+    if (!monthList.length) return
+    if (!monthFocus || !monthList.includes(monthFocus)) {
+      setMonthFocus(monthList[0])
+    }
+  }, [monthFocus, monthList])
+
   const statsToShow: StatCard[] = useMemo(() => {
     const template = statsByRange[statRange]
     return template.map((card) => {
@@ -84,12 +112,12 @@ export function DashboardPage({ trades, userId, selectedAccounts = null }: Props
   }, [computedStats, statRange])
 
   const activeMonthReturns: MonthReturn[] = useMemo(() => {
+    if (!monthFocus) return []
     const derived = groupMonthlyReturns(activeTrades, monthFocus)
     if (derived.length) return derived
-    return monthReturnsByMonth[monthFocus] ?? []
+    return monthReturnsByMonth[monthFocus as keyof typeof monthReturnsByMonth] ?? []
   }, [activeTrades, monthFocus])
 
-  const monthList = Object.keys(monthReturnsByMonth) as (keyof typeof monthReturnsByMonth)[]
   const monthIndex = monthList.indexOf(monthFocus)
   const analysisByRange = useMemo(() => buildTradeAnalysis(activeTrades), [activeTrades])
   const activeAnalysis = analysisByRange[analysisRange]
@@ -110,6 +138,10 @@ export function DashboardPage({ trades, userId, selectedAccounts = null }: Props
     if (monthIndex > 0) {
       setMonthFocus(monthList[monthIndex - 1])
     }
+  }
+
+  const toggleSection = (key: keyof typeof sectionOpen) => {
+    setSectionOpen((prev) => ({ ...prev, [key]: !prev[key] }))
   }
 
   return (
@@ -162,29 +194,39 @@ export function DashboardPage({ trades, userId, selectedAccounts = null }: Props
         <section className="panel">
           <div className="panel-header">
             <div className="panel-title">Badges</div>
-            <a className="link" href="#">
-              View all
-            </a>
+            <div className="panel-header-actions">
+              <a className="link" href="#">
+                View all
+              </a>
+              <button type="button" className="small-btn" onClick={() => toggleSection('badges')}>
+                {sectionOpen.badges ? 'Collapse' : 'Expand'}
+              </button>
+            </div>
           </div>
-          <div className="badge-row">
+          {sectionOpen.badges ? <div className="badge-row">
             {badges.map((badge: Badge) => (
               <div key={badge.title} className={`badge badge-${badge.color}`}>
                 <div className="badge-icon" />
                 <div className="badge-title">{badge.title}</div>
               </div>
             ))}
-          </div>
+          </div> : <p className="muted tiny">Expand to browse progress and milestone badges.</p>}
         </section>
 
         <section className="panel tip">
-          <div className="panel-title">Tip of the Day</div>
-          <div className="tip-body">
+          <div className="panel-header">
+            <div className="panel-title">Tip of the Day</div>
+            <button type="button" className="small-btn" onClick={() => toggleSection('tip')}>
+              {sectionOpen.tip ? 'Collapse' : 'Expand'}
+            </button>
+          </div>
+          {sectionOpen.tip ? <div className="tip-body">
             <div className="tip-title">Technical vs Fundamental</div>
             <p>
               Don&apos;t limit yourself to one approach. The best traders often combine technical and
               fundamental analysis for a more complete market perspective.
             </p>
-          </div>
+          </div> : <p className="muted tiny">Expand to see today’s coaching prompt.</p>}
         </section>
       </div>
 
@@ -192,17 +234,22 @@ export function DashboardPage({ trades, userId, selectedAccounts = null }: Props
         <section className="panel">
           <div className="panel-header">
             <div className="panel-title">Month Returns</div>
-            <div className="chip-row">
-              <button className="tab" onClick={goPrevMonth} disabled={monthIndex === monthList.length - 1}>
-                Previous
-              </button>
-              <span className="chip filled">{monthFocus}</span>
-              <button className="tab" onClick={goNextMonth} disabled={monthIndex === 0}>
-                Next
+            <div className="panel-header-actions">
+              <div className="chip-row">
+                <button className="tab" onClick={goPrevMonth} disabled={monthIndex === monthList.length - 1}>
+                  Previous
+                </button>
+                <span className="chip filled">{monthFocus}</span>
+                <button className="tab" onClick={goNextMonth} disabled={monthIndex === 0}>
+                  Next
+                </button>
+              </div>
+              <button type="button" className="small-btn" onClick={() => toggleSection('monthReturns')}>
+                {sectionOpen.monthReturns ? 'Collapse' : 'Expand'}
               </button>
             </div>
           </div>
-          <div className="bar-chart">
+          {sectionOpen.monthReturns ? <div className="bar-chart">
             {activeMonthReturns.map((entry) => (
               <div key={entry.label} className="bar-col">
                 <div
@@ -212,26 +259,32 @@ export function DashboardPage({ trades, userId, selectedAccounts = null }: Props
                 <span className="bar-label">{entry.label}</span>
               </div>
             ))}
-          </div>
+          </div> : <p className="muted tiny">Expand to review daily returns inside the selected month.</p>}
         </section>
 
         <section className="panel analysis-panel">
           <div className="panel-header">
             <div className="panel-title">Analysis</div>
-            <div className="stats-tabs">
-              {(['daily', 'weekly', 'monthly', 'yearly'] as const).map((range) => (
-                <button
-                  key={range}
-                  type="button"
-                  className={`tab ${analysisRange === range ? 'filled' : ''}`}
-                  onClick={() => setAnalysisRange(range)}
-                >
-                  {range[0].toUpperCase() + range.slice(1)}
-                </button>
-              ))}
+            <div className="panel-header-actions">
+              <div className="stats-tabs">
+                {(['daily', 'weekly', 'monthly', 'yearly'] as const).map((range) => (
+                  <button
+                    key={range}
+                    type="button"
+                    className={`tab ${analysisRange === range ? 'filled' : ''}`}
+                    onClick={() => setAnalysisRange(range)}
+                  >
+                    {range[0].toUpperCase() + range.slice(1)}
+                  </button>
+                ))}
+              </div>
+              <button type="button" className="small-btn" onClick={() => toggleSection('analysis')}>
+                {sectionOpen.analysis ? 'Collapse' : 'Expand'}
+              </button>
             </div>
           </div>
 
+          {sectionOpen.analysis ? <>
           <div className="analysis-grid">
             <div className="analysis-metric">
               <span>Trades</span>
@@ -290,11 +343,20 @@ export function DashboardPage({ trades, userId, selectedAccounts = null }: Props
               <p key={line}>{line}</p>
             ))}
           </div>
+          </> : <p className="muted tiny">Expand for the dashboard’s compact analysis summary and insights.</p>}
         </section>
       </div>
 
-      {error && <div className="muted">Error: {error}</div>}
-      {loading ? <div className="muted">Loading trades...</div> : <TradesTable trades={activeTrades} title="Recent Trades" />}
+      <section className="panel">
+        <div className="panel-header">
+          <div className="panel-title">Recent Trades</div>
+          <button type="button" className="small-btn" onClick={() => toggleSection('trades')}>
+            {sectionOpen.trades ? 'Collapse' : 'Expand'}
+          </button>
+        </div>
+        {error && <div className="muted">Error: {error}</div>}
+        {sectionOpen.trades ? (loading ? <div className="muted">Loading trades...</div> : <TradesTable trades={activeTrades} title="Recent Trades" />) : <p className="muted tiny">Expand to inspect recent executions.</p>}
+      </section>
     </>
   )
 }

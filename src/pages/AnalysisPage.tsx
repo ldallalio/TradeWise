@@ -462,6 +462,13 @@ export function AnalysisPage({
   const [error, setError] = useState<string | null>(null)
   const [timeframe, setTimeframe] = useState<AnalysisTimeframe>('daily')
   const [view, setView] = useState<'overview' | 'insights'>(defaultView)
+  const [sectionOpen, setSectionOpen] = useState({
+    summary: true,
+    charts: false,
+    symbols: false,
+    insights: true,
+    snapshot: false
+  })
 
   useEffect(() => {
     setView(defaultView)
@@ -514,6 +521,10 @@ export function AnalysisPage({
     losses: active.lossCount
   }
 
+  const toggleSection = (key: keyof typeof sectionOpen) => {
+    setSectionOpen((prev) => ({ ...prev, [key]: !prev[key] }))
+  }
+
   return (
     <>
       <PageHeader title="Analysis" subtitle="Merged analysis and insights across your imported trades" />
@@ -555,7 +566,14 @@ export function AnalysisPage({
 
         {view === 'overview' ? (
           <>
-            <div className="analysis-summary-cards">
+            <section className="panel analysis-collapsible-panel">
+              <div className="panel-header">
+                <div className="panel-title">Trade Summary</div>
+                <button type="button" className="small-btn" onClick={() => toggleSection('summary')}>
+                  {sectionOpen.summary ? 'Collapse' : 'Expand'}
+                </button>
+              </div>
+              {sectionOpen.summary ? <div className="analysis-summary-cards">
               <section className="panel analysis-stat-card">
                 <div className="panel-title">All Trades</div>
                 <div className="analysis-stat-row"><span>Gross P/L</span><strong>{formatMoney(active.grossPnl)}</strong></div>
@@ -591,9 +609,17 @@ export function AnalysisPage({
                 <div className="analysis-stat-row"><span>Short P/L</span><strong>{formatMoney(active.shortPnl)}</strong></div>
                 <div className="analysis-stat-row"><span>Fees & Comm.</span><strong>{formatMoney(active.fees)}</strong></div>
               </section>
-            </div>
+            </div> : <p className="muted tiny">Expand to inspect all trade, profit, and loss summary metrics.</p>}
+            </section>
 
-            <div className="analysis-chart-grid">
+            <section className="panel analysis-collapsible-panel">
+              <div className="panel-header">
+                <div className="panel-title">Charts And Distribution</div>
+                <button type="button" className="small-btn" onClick={() => toggleSection('charts')}>
+                  {sectionOpen.charts ? 'Collapse' : 'Expand'}
+                </button>
+              </div>
+              {sectionOpen.charts ? <div className="analysis-chart-grid">
               <PieCard
                 title="Winning vs Losing Trades"
                 firstLabel="Winning Trades"
@@ -658,26 +684,62 @@ export function AnalysisPage({
                   ))}
                 </div>
               </section>
-            </div>
+            </div> : <p className="muted tiny">Expand to view P/L history, distributions, and time-of-day charts.</p>}
+            </section>
+
+            <section className="panel analysis-collapsible-panel">
+              <div className="panel-header">
+                <div className="panel-title">Symbol Ranking</div>
+                <button type="button" className="small-btn" onClick={() => toggleSection('symbols')}>
+                  {sectionOpen.symbols ? 'Collapse' : 'Expand'}
+                </button>
+              </div>
+              {sectionOpen.symbols ? <div className="analysis-symbol-table analysis-symbol-table-expanded">
+                <div className="analysis-symbol-head">
+                  <span>Symbol</span>
+                  <span>Trades</span>
+                  <span>Win Rate</span>
+                  <span>P/L</span>
+                </div>
+                {active.symbolRows.map((row) => (
+                  <div key={row.ticker} className="analysis-symbol-row">
+                    <span>{row.ticker}</span>
+                    <span>{row.count}</span>
+                    <span>{formatPercent(row.winRate)}</span>
+                    <span className={row.pnl >= 0 ? 'success' : 'danger'}>{formatMoney(row.pnl)}</span>
+                  </div>
+                ))}
+              </div> : <p className="muted tiny">Expand to compare all tracked symbols instead of just the top few.</p>}
+            </section>
           </>
         ) : (
           <div className="analysis-insights-layout">
             <section className="analysis-notes panel">
-              <div className="panel-title">Actionable Insights</div>
-              {insights.map((line) => (
+              <div className="panel-header">
+                <div className="panel-title">Actionable Insights</div>
+                <button type="button" className="small-btn" onClick={() => toggleSection('insights')}>
+                  {sectionOpen.insights ? 'Collapse' : 'Expand'}
+                </button>
+              </div>
+              {sectionOpen.insights ? insights.map((line) => (
                 <p key={line}>{line}</p>
-              ))}
+              )) : <p className="muted tiny">Expand for generated reads on edge, timing, risk, and focus.</p>}
             </section>
             <section className="analysis-focus panel">
-              <div className="panel-title">Style Snapshot</div>
-              <div className="analysis-focus-list">
+              <div className="panel-header">
+                <div className="panel-title">Style Snapshot</div>
+                <button type="button" className="small-btn" onClick={() => toggleSection('snapshot')}>
+                  {sectionOpen.snapshot ? 'Collapse' : 'Expand'}
+                </button>
+              </div>
+              {sectionOpen.snapshot ? <div className="analysis-focus-list">
                 <p>Primary Symbol: {active.topSymbol?.ticker ?? 'N/A'}</p>
                 <p>Best Symbol Expectancy: {active.topSymbol ? formatMoney(active.topSymbol.expectancy) : 'N/A'}</p>
                 <p>Weak Symbol Expectancy: {active.weakestSymbol ? formatMoney(active.weakestSymbol.expectancy) : 'N/A'}</p>
                 <p>Directional Profile: {active.longCount} long / {active.shortCount} short</p>
                 <p>Volatility of Results: {formatMoney(active.pnlStdDev)} per trade</p>
                 <p>Net After Fees: {formatMoney(active.netAfterFees)}</p>
-              </div>
+              </div> : <p className="muted tiny">Expand for a condensed snapshot of style, symbol edge, and volatility.</p>}
             </section>
           </div>
         )}
