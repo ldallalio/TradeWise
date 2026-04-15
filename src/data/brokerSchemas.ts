@@ -112,9 +112,9 @@ export const brokerSchemas: Record<string, BrokerSchema> = {
   },
   Tradovate: {
     broker: 'Tradovate',
-    filePattern: 'fills-*.csv',
+    filePattern: 'fills-*.csv  or  Orders*.csv',
     notes:
-      'Tradovate exports typically include raw metadata columns (prefixed with an underscore) and the user-readable columns (e.g., “Contract”, “Timestamp”). We map the Timestamp (local) + Date columns to your trade time and use Contract/Product to populate tickers.',
+      'Tradovate exports (fills or orders) include raw metadata columns (prefixed with an underscore) and user-readable columns. We map Fill Time + Date to the trade timestamp, Contract to the ticker, and derive P&L via FIFO lot matching. Limit Price, Stop Price, Venue, Notional Value, and Currency are saved as dedicated columns when present.',
     columns: [
       { label: 'orderId', description: 'Internal Tradovate order identifier.' },
       { label: 'Account', mapsTo: 'source_account', required: true, sample: 'APEX344...0010', description: 'Account receiving fills.' },
@@ -138,13 +138,16 @@ export const brokerSchemas: Record<string, BrokerSchema> = {
       { label: 'Quantity', mapsTo: 'qty', sample: '1', description: 'Quantity column provided in some exports.' },
       { label: 'Text', description: 'Free-form notes text attached to the order.' },
       { label: 'Type', mapsTo: 'type', description: 'Order type (Market, Limit, etc.).' },
-      { label: 'Limit Price', description: 'Limit price, if provided.' },
-      { label: 'Stop Price', description: 'Stop trigger price, if provided.' },
-      { label: 'decimalLimit', description: 'Numeric limit price representation.' },
-      { label: 'decimalStop', description: 'Numeric stop price representation.' },
+      { label: 'Limit Price', mapsTo: 'limit_price', description: 'Limit price attached to the order, if any.', sample: '25949.00' },
+      { label: 'Stop Price', mapsTo: 'stop_price', description: 'Stop trigger price attached to the order, if any.', sample: '25891.25' },
+      { label: 'decimalLimit', description: 'Numeric limit price (fallback when Limit Price is absent).' },
+      { label: 'decimalStop', description: 'Numeric stop price (fallback when Stop Price is absent).' },
       { label: 'Filled Qty', description: 'Additional filled quantity column.' },
       { label: 'Avg Fill Price', description: 'Average fill price across the order.' },
       { label: 'decimalFillAvg', description: 'Numeric average fill price.' },
+      { label: 'Venue', mapsTo: 'venue', description: 'Platform that originated the order (e.g., Tradingview, Exit).', sample: 'Tradingview' },
+      { label: 'Notional Value', mapsTo: 'notional_value', description: 'Full notional value of the order in account currency.', sample: '154,044.00' },
+      { label: 'Currency', mapsTo: 'currency', description: 'Currency of the notional value (e.g., USD).', sample: 'USD' },
       { label: 'commission', description: 'Commission or fee per fill.', sample: '1.04' }
     ]
   },

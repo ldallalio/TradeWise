@@ -10,8 +10,14 @@ export type TradeRow = Partial<Trade> & {
   pnl?: number | string | null
   change?: string | null
   entry_ts?: string | null
+  open_ts?: string | null
   commission?: number | null
   fill_price?: number | null
+  limit_price?: number | null
+  stop_price?: number | null
+  venue?: string | null
+  notional_value?: number | null
+  currency?: string | null
   raw_payload?: Record<string, unknown> | null
 }
 
@@ -78,8 +84,14 @@ export const normalizeTradeRow = (row: TradeRow): Trade => {
     pnl: Number(row.pnl) || 0,
     change: row.change ?? '',
     entry_ts: row.entry_ts ?? null,
+    open_ts: row.open_ts ?? null,
     commission: row.commission ?? null,
     fill_price: row.fill_price ?? null,
+    limit_price: row.limit_price ?? null,
+    stop_price: row.stop_price ?? null,
+    venue: row.venue ?? null,
+    notional_value: row.notional_value ?? null,
+    currency: row.currency ?? null,
     raw_payload: row.raw_payload ?? null,
     source_account: row.source_account ?? null,
     source_broker: row.source_broker ?? null

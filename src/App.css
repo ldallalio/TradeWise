@@ -1432,6 +1432,45 @@ html.light-theme {
   line-height: 1.45;
 }
 
+.journal-image-preview-grid {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.journal-image-preview-card {
+  border: 1px solid #2b2f40;
+  border-radius: 10px;
+  background: #111523;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.journal-entry-images {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.journal-entry-image-link {
+  display: block;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid #2b2f40;
+  background: #0f111c;
+}
+
+.journal-entry-image {
+  width: 100%;
+  height: 120px;
+  object-fit: cover;
+  display: block;
+}
+
 .table {
   padding: 0;
   overflow: hidden;
@@ -2093,6 +2132,7 @@ html.light-theme .instructions,
 html.light-theme .journal-prompt,
 html.light-theme .journal-form-panel,
 html.light-theme .journal-entry,
+html.light-theme .journal-image-preview-card,
 html.light-theme .account-dropdown {
   background: #ffffff;
   border-color: #d4d7ec;
@@ -2197,6 +2237,11 @@ html.light-theme .select-button,
 html.light-theme .upload-box,
 html.light-theme .advanced-toggle {
   background: #f7f8fe;
+  border-color: #d4d7ec;
+}
+
+html.light-theme .journal-entry-image-link {
+  background: #ffffff;
   border-color: #d4d7ec;
 }
 

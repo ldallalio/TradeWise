@@ -1,6 +1,14 @@
 import type { Trade } from '../data/mockData'
 import { getTradeDate } from './trades'
 
+const getNetPnl = (trade: Trade) => {
+  const pnl = Number(trade.pnl) || 0
+  const fee = Number(trade.commission) || 0
+  const payload = trade.raw_payload as Record<string, unknown> | null | undefined
+  const pnlIncludesFees = Boolean(payload?._pnl_includes_fees)
+  return pnlIncludesFees ? pnl : pnl - fee
+}
+
 export type AggregateStats = {
   cumulativeReturn: number
   profitFactor: number
@@ -15,11 +23,12 @@ export function aggregateStats(trades: Trade[]): AggregateStats {
   if (!trades.length) {
     return { cumulativeReturn: 0, profitFactor: 0, averageReturn: 0, winRate: 0 }
   }
-  const totalPnl = trades.reduce((sum, t) => sum + t.pnl, 0)
-  const wins = trades.filter((t) => t.pnl > 0)
-  const losses = trades.filter((t) => t.pnl < 0)
-  const winSum = wins.reduce((sum, t) => sum + t.pnl, 0)
-  const lossSum = losses.reduce((sum, t) => sum + t.pnl, 0) // negative
+  const netPnls = trades.map((trade) => getNetPnl(trade))
+  const totalPnl = netPnls.reduce((sum, value) => sum + value, 0)
+  const wins = netPnls.filter((value) => value > 0)
+  const losses = netPnls.filter((value) => value < 0)
+  const winSum = wins.reduce((sum, value) => sum + value, 0)
+  const lossSum = losses.reduce((sum, value) => sum + value, 0) // negative
   const profitFactor = wins.length
     ? lossSum !== 0
       ? winSum / Math.abs(lossSum)
@@ -48,7 +57,7 @@ export function groupMonthlyReturns(trades: Trade[], monthFocus: string) {
     if (!d) return
     if (d.getFullYear() === yearNum && d.getMonth() === monthIndex) {
       const day = `${d.getDate()}`.padStart(2, '0')
-      buckets.set(day, (buckets.get(day) ?? 0) + trade.pnl)
+      buckets.set(day, (buckets.get(day) ?? 0) + getNetPnl(trade))
     }
   })
 

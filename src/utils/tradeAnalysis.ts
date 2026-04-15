@@ -1,5 +1,14 @@
 import type { Trade } from '../data/mockData'
 import { formatLocalDate, getTradeDate } from './trades'
+import { shouldHideFilledZeroPnl } from './tradeFilters'
+
+const getNetPnl = (trade: Trade) => {
+  const pnl = Number(trade.pnl) || 0
+  const fee = Number(trade.commission) || 0
+  const payload = trade.raw_payload as Record<string, unknown> | null | undefined
+  const pnlIncludesFees = Boolean(payload?._pnl_includes_fees)
+  return pnlIncludesFees ? pnl : pnl - fee
+}
 
 export type AnalysisTimeframe = 'daily' | 'weekly' | 'monthly' | 'yearly'
 
@@ -170,6 +179,7 @@ const emptyAnalysis = (timeframe: AnalysisTimeframe): TradeAnalysis => {
 
 const buildSingleAnalysis = (trades: Trade[], timeframe: AnalysisTimeframe): TradeAnalysis => {
   const normalized = trades
+    .filter((trade) => !shouldHideFilledZeroPnl(trade))
     .map((trade) => ({ trade, dt: getTradeDate(trade) }))
     .filter((row): row is { trade: Trade; dt: Date } => Boolean(row.dt))
     .sort((left, right) => left.dt.getTime() - right.dt.getTime())
@@ -196,7 +206,7 @@ const buildSingleAnalysis = (trades: Trade[], timeframe: AnalysisTimeframe): Tra
   let longestLossStreak = 0
 
   for (const row of normalized) {
-    const pnl = Number(row.trade.pnl) || 0
+    const pnl = getNetPnl(row.trade)
     const qty = Math.abs(Number(row.trade.qty) || 0)
     const fee = Number(row.trade.commission) || 0
     const side = (row.trade.side || '').toLowerCase()
@@ -278,7 +288,7 @@ const buildSingleAnalysis = (trades: Trade[], timeframe: AnalysisTimeframe): Tra
     grossProfit,
     grossLoss,
     fees,
-    netAfterFees: netPnl - fees,
+    netAfterFees: netPnl,
     winRate,
     profitFactor,
     expectancy,

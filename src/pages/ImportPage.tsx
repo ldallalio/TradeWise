@@ -56,6 +56,7 @@ type DeleteTradeRow = {
 type InsertTradeRow = {
   user_id: string
   entry_ts: string | null
+  open_ts: string | null
   side: string | null
   ticker: string | null
   type: string | null
@@ -68,6 +69,11 @@ type InsertTradeRow = {
   time: string | null
   commission: number | null
   fill_price: number | null
+  limit_price: number | null
+  stop_price: number | null
+  venue: string | null
+  notional_value: number | null
+  currency: string | null
   raw_payload: Record<string, unknown> | null
 }
 
@@ -581,12 +587,14 @@ const buildTradovateClosedTrades = (rows: ParsedCsvRow[]): Partial<Trade>[] => {
         closedTrades.push({
           ...row.trade,
           side: 'Short',
+          open_ts: lot.openedAt,
           qty: matched,
           pnl,
           type: 'Future',
           fill_price: fillPrice,
           raw_payload: {
             ...(row.trade.raw_payload ?? {}),
+            _pnl_includes_fees: true,
             _matched_open_ts: lot.openedAt,
             _matched_open_price: lot.price,
             _matched_close_price: fillPrice,
@@ -619,12 +627,14 @@ const buildTradovateClosedTrades = (rows: ParsedCsvRow[]): Partial<Trade>[] => {
         closedTrades.push({
           ...row.trade,
           side: 'Long',
+          open_ts: lot.openedAt,
           qty: matched,
           pnl,
           type: 'Future',
           fill_price: fillPrice,
           raw_payload: {
             ...(row.trade.raw_payload ?? {}),
+            _pnl_includes_fees: true,
             _matched_open_ts: lot.openedAt,
             _matched_open_price: lot.price,
             _matched_close_price: fillPrice,
@@ -729,6 +739,10 @@ const deriveFifoPnl = (rows: ParsedCsvRow[]) => {
     if (closedQty > 0) {
       const feeShare = qtyTotal ? totalFee * (closedQty / qtyTotal) : totalFee
       row.trade.pnl = realized - feeShare
+      row.trade.raw_payload = {
+        ...(row.trade.raw_payload ?? {}),
+        _pnl_includes_fees: true
+      }
       row.meta.closedQty = closedQty
     } else if (row.trade.pnl === undefined) {
       row.trade.pnl = 0
@@ -796,6 +810,11 @@ const parseCsv = (text: string, broker: string): Partial<Trade>[] => {
           record.fee ||
           record.fees
       )
+      const limitPrice = parseNumber(record.limit_price || record.decimallimit)
+      const stopPrice = parseNumber(record.stop_price || record.decimalstop)
+      const venueValue = record.venue?.trim() || null
+      const notionalValue = parseNumber(record.notional_value)
+      const currencyValue = record.currency?.trim() || null
       const entryDate = entryTs ? new Date(entryTs) : null
       const qtyValue = typeof qty === 'number' ? Math.abs(qty) : undefined
       const pnlValue = typeof pnl === 'number' ? pnl : undefined
@@ -831,6 +850,11 @@ const parseCsv = (text: string, broker: string): Partial<Trade>[] => {
         change: changeValue,
         commission: commissionValue ?? null,
         fill_price: fillPrice ?? null,
+        limit_price: limitPrice ?? null,
+        stop_price: stopPrice ?? null,
+        venue: venueValue,
+        notional_value: notionalValue ?? null,
+        currency: currencyValue,
         raw_payload: {
           ...record,
           _parsed_entry_ts: entryTs ?? null,
@@ -874,7 +898,7 @@ const parseCsv = (text: string, broker: string): Partial<Trade>[] => {
 }
 
 const stripOptionalColumns = <T extends Record<string, unknown>>(rows: T[]) => {
-  const optionalKeys = ['raw_payload', 'commission', 'fill_price']
+  const optionalKeys = ['raw_payload', 'commission', 'fill_price', 'open_ts', 'limit_price', 'stop_price', 'venue', 'notional_value', 'currency']
   return rows.map((row) => {
     const clone = { ...row }
     optionalKeys.forEach((key) => {
@@ -974,6 +998,7 @@ const stripDateTimeColumns = <T extends Record<string, unknown>>(rows: T[]) =>
           const payload = {
             user_id: userId,
             entry_ts: r.entry_ts || null,
+            open_ts: r.open_ts || null,
             side: r.side || null,
             ticker: r.ticker || null,
             type: r.type || null,
@@ -986,6 +1011,11 @@ const stripDateTimeColumns = <T extends Record<string, unknown>>(rows: T[]) =>
             time: r.time || null,
             commission: r.commission ?? null,
             fill_price: r.fill_price ?? null,
+            limit_price: r.limit_price ?? null,
+            stop_price: r.stop_price ?? null,
+            venue: r.venue ?? null,
+            notional_value: r.notional_value ?? null,
+            currency: r.currency ?? null,
             raw_payload: r.raw_payload ?? null
           }
           const key = buildTradeKey(payload)

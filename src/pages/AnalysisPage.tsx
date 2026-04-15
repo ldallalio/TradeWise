@@ -4,6 +4,7 @@ import { PageHeader } from '../components/PageHeader'
 import { supabase } from '../supabaseClient'
 import { getTradeDate, normalizeTradeRow, type TradeRow } from '../utils/trades'
 import type { AnalysisTimeframe } from '../utils/tradeAnalysis'
+import { shouldHideFilledZeroPnl } from '../utils/tradeFilters'
 
 type Props = {
   trades: Trade[]
@@ -88,7 +89,8 @@ const formatDuration = (seconds: number | null) => {
 
 const getTradeDurationSec = (trade: Trade) => {
   const payload = trade.raw_payload as Record<string, unknown> | null | undefined
-  const openedAt = typeof payload?._matched_open_ts === 'string' ? payload._matched_open_ts : null
+  const openedAt =
+    trade.open_ts || (typeof payload?._matched_open_ts === 'string' ? payload._matched_open_ts : null)
   if (!openedAt) return null
   const closeDate = getTradeDate(trade)
   const openDate = new Date(openedAt)
@@ -163,17 +165,28 @@ const buildDistribution = (values: number[]) => {
   return buckets
 }
 
+const getNetPnl = (trade: Trade) => {
+  const pnl = Number(trade.pnl) || 0
+  const fee = Number(trade.commission) || 0
+  const payload = trade.raw_payload as Record<string, unknown> | null | undefined
+  const pnlIncludesFees = Boolean(payload?._pnl_includes_fees)
+  return pnlIncludesFees ? pnl : pnl - fee
+}
+
 const buildOverviewStats = (allTrades: Trade[], timeframe: AnalysisTimeframe): OverviewStats => {
-  const filteredTrades = getFilteredTrades(allTrades, timeframe)
-  const pnlValues = filteredTrades.map((trade) => Number(trade.pnl) || 0)
+  const filteredTrades = getFilteredTrades(allTrades, timeframe).filter((trade) => !shouldHideFilledZeroPnl(trade))
+  const pnlValues = filteredTrades.map((trade) => getNetPnl(trade))
   const commissions = filteredTrades.map((trade) => Number(trade.commission) || 0)
   const quantities = filteredTrades.map((trade) => Math.abs(Number(trade.qty) || 0))
 
   const tradeCount = filteredTrades.length
-  const contracts = quantities.reduce((sum, value) => sum + value, 0)
+  const oneWayContracts = quantities.reduce((sum, value) => sum + value, 0)
+  const isPureTradovateSet =
+    filteredTrades.length > 0 && filteredTrades.every((trade) => (trade.source_broker || '').toLowerCase() === 'tradovate')
+  const contracts = isPureTradovateSet ? oneWayContracts * 2 : oneWayContracts
   const grossPnl = pnlValues.reduce((sum, value) => sum + value, 0)
   const fees = commissions.reduce((sum, value) => sum + value, 0)
-  const netAfterFees = grossPnl - fees
+  const netAfterFees = grossPnl
 
   const wins = pnlValues.filter((value) => value > 0)
   const losses = pnlValues.filter((value) => value < 0)
@@ -189,7 +202,7 @@ const buildOverviewStats = (allTrades: Trade[], timeframe: AnalysisTimeframe): O
   const expectancy = tradeCount ? grossPnl / tradeCount : 0
 
   const durationRows = filteredTrades
-    .map((trade) => ({ duration: getTradeDurationSec(trade), pnl: Number(trade.pnl) || 0 }))
+    .map((trade) => ({ duration: getTradeDurationSec(trade), pnl: getNetPnl(trade) }))
     .filter((row): row is { duration: number; pnl: number } => row.duration !== null)
   const allDurations = durationRows.map((row) => row.duration)
   const winDurations = durationRows.filter((row) => row.pnl > 0).map((row) => row.duration)
@@ -202,11 +215,13 @@ const buildOverviewStats = (allTrades: Trade[], timeframe: AnalysisTimeframe): O
   const cumulativeWithFees: Point[] = []
 
   filteredTrades.forEach((trade, index) => {
-    const pnl = Number(trade.pnl) || 0
+    const pnl = getNetPnl(trade)
     const fee = Number(trade.commission) || 0
     const label = `${index + 1}`
     runningNoFees += pnl
-    runningWithFees += pnl - fee
+    const payload = trade.raw_payload as Record<string, unknown> | null | undefined
+    const pnlIncludesFees = Boolean(payload?._pnl_includes_fees)
+    runningWithFees += pnlIncludesFees ? pnl : pnl - fee
     pnlHistory.push({ label, value: pnl })
     cumulativeNoFees.push({ label, value: runningNoFees })
     cumulativeWithFees.push({ label, value: runningWithFees })
@@ -229,7 +244,7 @@ const buildOverviewStats = (allTrades: Trade[], timeframe: AnalysisTimeframe): O
 
   filteredTrades.forEach((trade) => {
     const ticker = (trade.ticker || 'Unknown').toUpperCase()
-    const pnl = Number(trade.pnl) || 0
+    const pnl = getNetPnl(trade)
     const entry = symbolMap.get(ticker) ?? { pnl: 0, count: 0, wins: 0 }
     entry.pnl += pnl
     entry.count += 1

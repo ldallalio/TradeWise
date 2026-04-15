@@ -20,6 +20,7 @@ type JournalEntry = {
   mood: 'confident' | 'neutral' | 'frustrated' | 'focused'
   tags: string[]
   notes: string
+  imageUrls: string[]
 }
 
 type JournalEntryRow = {
@@ -31,6 +32,7 @@ type JournalEntryRow = {
   mood: JournalEntry['mood']
   tags: string[] | null
   notes: string
+  image_urls: string[] | null
 }
 
 const SETUP_PREFIX = 'setup:'
@@ -100,7 +102,18 @@ const readCachedEntries = (storageKey: string) => {
   const saved = localStorage.getItem(storageKey)
   if (!saved) return [] as JournalEntry[]
   try {
-    return JSON.parse(saved) as JournalEntry[]
+    const parsed = JSON.parse(saved) as Array<Partial<JournalEntry>>
+    return parsed.map((entry) => ({
+      id: entry.id ?? crypto.randomUUID(),
+      createdAt: entry.createdAt ?? new Date().toISOString(),
+      tradeDate: entry.tradeDate ?? formatLocalDate(new Date()),
+      title: entry.title ?? '',
+      symbol: entry.symbol ?? '',
+      mood: (entry.mood as JournalEntry['mood']) ?? 'focused',
+      tags: Array.isArray(entry.tags) ? entry.tags : [],
+      notes: entry.notes ?? '',
+      imageUrls: Array.isArray(entry.imageUrls) ? entry.imageUrls : []
+    }))
   } catch {
     return [] as JournalEntry[]
   }
@@ -114,7 +127,8 @@ const mapRowToEntry = (row: JournalEntryRow): JournalEntry => ({
   symbol: row.symbol ?? '',
   mood: row.mood,
   tags: row.tags ?? [],
-  notes: row.notes
+  notes: row.notes,
+  imageUrls: row.image_urls ?? []
 })
 
 export function JournalPage({ trades, userId, selectedAccounts = null }: Props) {
@@ -134,6 +148,8 @@ export function JournalPage({ trades, userId, selectedAccounts = null }: Props) 
   const [mistakes, setMistakes] = useState<string[]>([])
   const [tagsRaw, setTagsRaw] = useState('')
   const [notes, setNotes] = useState('')
+  const [journalImages, setJournalImages] = useState<File[]>([])
+  const [uploadingImages, setUploadingImages] = useState(false)
   const [entries, setEntries] = useState<JournalEntry[]>([])
   const [reviewWeekOffset, setReviewWeekOffset] = useState(0)
   const [copiedReview, setCopiedReview] = useState(false)
@@ -148,6 +164,18 @@ export function JournalPage({ trades, userId, selectedAccounts = null }: Props) 
 
   const storageKey = `tradewise-journal-${userId ?? 'anon'}`
 
+  const extractStoragePathFromUrl = (url: string) => {
+    const marker = '/storage/v1/object/public/journal-images/'
+    const idx = url.indexOf(marker)
+    if (idx === -1) return null
+    const encoded = url.slice(idx + marker.length)
+    try {
+      return decodeURIComponent(encoded)
+    } catch {
+      return encoded
+    }
+  }
+
   useEffect(() => {
     localStorage.setItem(storageKey, JSON.stringify(entries))
   }, [entries, storageKey])
@@ -161,11 +189,36 @@ export function JournalPage({ trades, userId, selectedAccounts = null }: Props) 
       }
 
       setJournalStatus('syncing')
+      const baseSelect = 'id, created_at, trade_date, title, symbol, mood, tags, notes'
       const { data, error: journalError } = await supabase
         .from('journal_entries')
-        .select('id, created_at, trade_date, title, symbol, mood, tags, notes')
+        .select(`${baseSelect}, image_urls`)
         .eq('user_id', userId)
         .order('created_at', { ascending: false })
+
+      if (journalError && /image_urls|column/i.test(journalError.message)) {
+        const { data: fallbackData, error: fallbackError } = await supabase
+          .from('journal_entries')
+          .select(baseSelect)
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false })
+
+        if (fallbackError) {
+          setEntries(readCachedEntries(storageKey))
+          setJournalStatus('offline')
+          const detail = fallbackError.message ?? fallbackError.code ?? 'unknown error'
+          setError(`Journal cloud sync unavailable (${detail}). Showing locally cached entries.`)
+          return
+        }
+
+        const mapped = ((fallbackData ?? []) as JournalEntryRow[]).map((row) => ({
+          ...mapRowToEntry(row),
+          imageUrls: []
+        }))
+        setEntries(mapped)
+        setJournalStatus('synced')
+        return
+      }
 
       if (journalError) {
         setEntries(readCachedEntries(storageKey))
@@ -434,6 +487,7 @@ export function JournalPage({ trades, userId, selectedAccounts = null }: Props) 
       return
     }
 
+    const baseSelect = 'id, created_at, trade_date, title, symbol, mood, tags, notes'
     const { data, error: insertError } = await supabase
       .from('journal_entries')
       .insert({
@@ -443,10 +497,41 @@ export function JournalPage({ trades, userId, selectedAccounts = null }: Props) 
         symbol: next.symbol || null,
         mood: next.mood,
         tags: next.tags,
-        notes: next.notes
+        notes: next.notes,
+        image_urls: next.imageUrls
       })
-      .select('id, created_at, trade_date, title, symbol, mood, tags, notes')
+      .select(`${baseSelect}, image_urls`)
       .single()
+
+    if (insertError && /image_urls|column/i.test(insertError.message)) {
+      const { data: fallbackData, error: fallbackInsertError } = await supabase
+        .from('journal_entries')
+        .insert({
+          user_id: userId,
+          trade_date: next.tradeDate,
+          title: next.title,
+          symbol: next.symbol || null,
+          mood: next.mood,
+          tags: next.tags,
+          notes: next.notes
+        })
+        .select(baseSelect)
+        .single()
+
+      if (fallbackInsertError) {
+        setEntries((prev) => [next, ...prev])
+        setJournalStatus('offline')
+        setError('Could not sync this entry to cloud. Saved locally.')
+      } else if (fallbackData) {
+        const synced = mapRowToEntry(fallbackData as JournalEntryRow)
+        setEntries((prev) => [{ ...synced, imageUrls: [] }, ...prev])
+        setJournalStatus('synced')
+        if (next.imageUrls.length) {
+          setError('Entry saved, but image URLs were skipped because image_urls column is not in journal_entries yet.')
+        }
+      }
+      return
+    }
 
     if (insertError) {
       setEntries((prev) => [next, ...prev])
@@ -459,8 +544,53 @@ export function JournalPage({ trades, userId, selectedAccounts = null }: Props) 
     }
   }
 
+  const uploadImages = async (files: File[]) => {
+    if (!files.length) return [] as string[]
+    if (!userId || journalStatus === 'offline') {
+      setError('Image upload requires cloud sync. Please sign in to upload journal screenshots.')
+      return [] as string[]
+    }
+
+    const uploadedUrls: string[] = []
+    const uploadedPaths: string[] = []
+
+    try {
+      setUploadingImages(true)
+      for (const file of files) {
+        if (!file.type.startsWith('image/')) continue
+        const ext = file.name.includes('.') ? file.name.split('.').pop()?.toLowerCase() || 'jpg' : 'jpg'
+        const safeExt = ext.replace(/[^a-z0-9]/g, '') || 'jpg'
+        const path = `${userId}/${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}.${safeExt}`
+        const { error: uploadError } = await supabase.storage.from('journal-images').upload(path, file, {
+          cacheControl: '3600',
+          upsert: false
+        })
+        if (uploadError) {
+          throw new Error(uploadError.message)
+        }
+        uploadedPaths.push(path)
+        const { data } = supabase.storage.from('journal-images').getPublicUrl(path)
+        if (data?.publicUrl) uploadedUrls.push(data.publicUrl)
+      }
+      return uploadedUrls
+    } catch (err) {
+      if (uploadedPaths.length) {
+        await supabase.storage.from('journal-images').remove(uploadedPaths)
+      }
+      setError(`Image upload failed: ${(err as Error).message}`)
+      return []
+    } finally {
+      setUploadingImages(false)
+    }
+  }
+
   const createEntry = async () => {
     if (!title.trim() || !notes.trim()) return
+
+    const imageUrls = await uploadImages(journalImages)
+    if (journalImages.length && !imageUrls.length) {
+      return
+    }
 
     const setupTag = slugifyLabel(setupName)
     const prefixedMistakes = mistakes.map((mistake) => `${MISTAKE_PREFIX}${slugifyLabel(mistake)}`)
@@ -481,7 +611,8 @@ export function JournalPage({ trades, userId, selectedAccounts = null }: Props) 
       symbol: symbol.trim().toUpperCase(),
       mood,
       tags: mergedTags,
-      notes: notes.trim()
+      notes: notes.trim(),
+      imageUrls
     }
 
     await persistEntry(next)
@@ -492,6 +623,7 @@ export function JournalPage({ trades, userId, selectedAccounts = null }: Props) 
     setMistakes([])
     setTagsRaw('')
     setNotes('')
+    setJournalImages([])
     setMood('focused')
   }
 
@@ -510,7 +642,8 @@ export function JournalPage({ trades, userId, selectedAccounts = null }: Props) 
         ...(weeklyReview.topSetup ? [`${SETUP_PREFIX}${weeklyReview.topSetup.setup}`] : []),
         ...(weeklyReview.topLeak ? [`${MISTAKE_PREFIX}${weeklyReview.topLeak.mistake}`] : [])
       ],
-      notes: weeklyReview.summary
+      notes: weeklyReview.summary,
+      imageUrls: []
     }
 
     await persistEntry(next)
@@ -529,6 +662,7 @@ export function JournalPage({ trades, userId, selectedAccounts = null }: Props) 
 
   const removeEntry = async (id: string) => {
     const previous = entries
+    const removed = entries.find((entry) => entry.id === id)
     setEntries((prev) => prev.filter((entry) => entry.id !== id))
 
     if (!userId || journalStatus === 'offline') return
@@ -537,6 +671,16 @@ export function JournalPage({ trades, userId, selectedAccounts = null }: Props) 
     if (deleteError) {
       setEntries(previous)
       setError('Could not delete journal entry from cloud. Nothing was removed.')
+      return
+    }
+
+    if (removed?.imageUrls.length) {
+      const paths = removed.imageUrls
+        .map(extractStoragePathFromUrl)
+        .filter((value): value is string => Boolean(value))
+      if (paths.length) {
+        await supabase.storage.from('journal-images').remove(paths)
+      }
     }
   }
 
@@ -686,9 +830,41 @@ export function JournalPage({ trades, userId, selectedAccounts = null }: Props) 
               />
             </label>
 
+            <label className="label">
+              Journal Images
+              <input
+                className="input"
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={(e) => {
+                  const files = Array.from(e.target.files ?? []).filter((file) => file.type.startsWith('image/'))
+                  setJournalImages(files.slice(0, 6))
+                }}
+              />
+              <span className="muted tiny">Upload up to 6 screenshots/charts. Requires cloud sync.</span>
+            </label>
+
+            {journalImages.length ? (
+              <div className="journal-image-preview-grid">
+                {journalImages.map((file, idx) => (
+                  <div key={`${file.name}-${idx}`} className="journal-image-preview-card">
+                    <span className="muted tiny">{file.name}</span>
+                    <button
+                      type="button"
+                      className="small-btn"
+                      onClick={() => setJournalImages((prev) => prev.filter((_, i) => i !== idx))}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
             <div className="action-row">
-              <button type="button" className="pill-button gradient" onClick={createEntry}>
-                Save Entry
+              <button type="button" className="pill-button gradient" onClick={createEntry} disabled={uploadingImages}>
+                {uploadingImages ? 'Uploading Images…' : 'Save Entry'}
               </button>
             </div>
           </div> : null}
@@ -875,6 +1051,15 @@ export function JournalPage({ trades, userId, selectedAccounts = null }: Props) 
                   </div>
                 ) : null}
                 <p>{entry.notes}</p>
+                {entry.imageUrls.length ? (
+                  <div className="journal-entry-images">
+                    {entry.imageUrls.map((url, idx) => (
+                      <a key={`${entry.id}-image-${idx}`} href={url} target="_blank" rel="noreferrer" className="journal-entry-image-link">
+                        <img src={url} alt={`Journal attachment ${idx + 1}`} className="journal-entry-image" loading="lazy" />
+                      </a>
+                    ))}
+                  </div>
+                ) : null}
               </article>
             ))}
           </div>
